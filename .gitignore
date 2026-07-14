@@ -1,0 +1,5 @@
+.claude/
+*.mov
+*.mp4
+*.tflite
+*.task
