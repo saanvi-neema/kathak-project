@@ -1,6 +1,13 @@
 """
 Phase 1: Landmark Extraction
-Extracts body and hand landmarks from a video clip using MediaPipe.
+Extracts body and hand landmarks from a video clip using MediaPipe's Tasks API.
+
+Uses PoseLandmarker + HandLandmarker (not the old mp.solutions API, which
+mediapipe 0.10.35 removed on Windows -- see the pilot scripts for the same
+workaround). Requires downloaded model bundles:
+    models/pose_landmarker_full.task
+    models/hand_landmarker.task
+
 Outputs one CSV per clip to data/landmarks/.
 
 Usage:
@@ -11,16 +18,58 @@ Usage:
 import argparse
 import csv
 import os
+
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
 
 VISIBILITY_THRESHOLD = 0.5
 
-mp_pose = mp.solutions.pose
-mp_hands = mp.solutions.hands
+POSE_MODEL_PATH = "models/pose_landmarker_full.task"
+HAND_MODEL_PATH = "models/hand_landmarker.task"
 
-BODY_LANDMARK_NAMES = [lm.name.lower() for lm in mp_pose.PoseLandmark]
+# BlazePose 33-point topology, in landmark-index order. Same order as the old
+# mp.solutions.pose.PoseLandmark enum -- the Tasks API kept the same indices,
+# just dropped the enum.
+BODY_LANDMARK_NAMES = [
+    "nose", "left_eye_inner", "left_eye", "left_eye_outer",
+    "right_eye_inner", "right_eye", "right_eye_outer",
+    "left_ear", "right_ear", "mouth_left", "mouth_right",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_pinky", "right_pinky",
+    "left_index", "right_index", "left_thumb", "right_thumb",
+    "left_hip", "right_hip", "left_knee", "right_knee",
+    "left_ankle", "right_ankle", "left_heel", "right_heel",
+    "left_foot_index", "right_foot_index",
+]
+
+
+def make_pose_landmarker():
+    base_options = mp_python.BaseOptions(model_asset_path=POSE_MODEL_PATH)
+    options = mp_vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp_vision.RunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mp_vision.PoseLandmarker.create_from_options(options)
+
+
+def make_hand_landmarker():
+    base_options = mp_python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
+    options = mp_vision.HandLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp_vision.RunningMode.VIDEO,
+        num_hands=2,
+        min_hand_detection_confidence=0.5,
+        min_hand_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mp_vision.HandLandmarker.create_from_options(options)
 
 
 def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> str:
@@ -39,60 +88,56 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
 
     rows = []
 
-    with mp_pose.Pose(
-        static_image_mode=False,
-        model_complexity=2,
-        smooth_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as pose, mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=2,
-        model_complexity=1,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as hands:
-
+    pose_landmarker = make_pose_landmarker()
+    hand_landmarker = make_hand_landmarker()
+    try:
         frame_idx = 0
+        last_ts = -1
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pose_result = pose.process(rgb)
-            hand_result = hands.process(rgb)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+            ts_ms = int((frame_idx / fps) * 1000)
+            if ts_ms <= last_ts:
+                ts_ms = last_ts + 1
+            last_ts = ts_ms
+
+            pose_result = pose_landmarker.detect_for_video(mp_image, ts_ms)
+            hand_result = hand_landmarker.detect_for_video(mp_image, ts_ms)
 
             row = {
                 "frame": frame_idx,
-                "timestamp_ms": int((frame_idx / fps) * 1000),
+                "timestamp_ms": ts_ms,
             }
 
             # Body landmarks (33 keypoints)
             if pose_result.pose_landmarks:
-                for i, lm in enumerate(pose_result.pose_landmarks.landmark):
-                    name = BODY_LANDMARK_NAMES[i]
+                lm = pose_result.pose_landmarks[0]
+                for i, name in enumerate(BODY_LANDMARK_NAMES):
+                    p = lm[i]
                     # Always store visibility; only store position if confident
-                    row[f"body_{name}_vis"] = round(lm.visibility, 4)
-                    if lm.visibility >= VISIBILITY_THRESHOLD:
-                        row[f"body_{name}_x"] = round(lm.x, 6)
-                        row[f"body_{name}_y"] = round(lm.y, 6)
-                        row[f"body_{name}_z"] = round(lm.z, 6)
+                    row[f"body_{name}_vis"] = round(p.visibility, 4)
+                    if p.visibility >= VISIBILITY_THRESHOLD:
+                        row[f"body_{name}_x"] = round(p.x, 6)
+                        row[f"body_{name}_y"] = round(p.y, 6)
+                        row[f"body_{name}_z"] = round(p.z, 6)
                     else:
                         row[f"body_{name}_x"] = None
                         row[f"body_{name}_y"] = None
                         row[f"body_{name}_z"] = None
 
             # Hand landmarks (21 keypoints per hand)
-            if hand_result.multi_hand_landmarks and hand_result.multi_handedness:
-                for hand_lm, handedness in zip(
-                    hand_result.multi_hand_landmarks, hand_result.multi_handedness
-                ):
-                    hand_label = handedness.classification[0].label.lower()  # "left" or "right"
-                    for j, lm in enumerate(hand_lm.landmark):
-                        row[f"hand_{hand_label}_{j}_x"] = round(lm.x, 6)
-                        row[f"hand_{hand_label}_{j}_y"] = round(lm.y, 6)
-                        row[f"hand_{hand_label}_{j}_z"] = round(lm.z, 6)
+            if hand_result.hand_landmarks and hand_result.handedness:
+                for hand_lm, handedness in zip(hand_result.hand_landmarks, hand_result.handedness):
+                    hand_label = handedness[0].category_name.lower()  # "left" or "right"
+                    for j, p in enumerate(hand_lm):
+                        row[f"hand_{hand_label}_{j}_x"] = round(p.x, 6)
+                        row[f"hand_{hand_label}_{j}_y"] = round(p.y, 6)
+                        row[f"hand_{hand_label}_{j}_z"] = round(p.z, 6)
 
             rows.append(row)
 
@@ -100,6 +145,9 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
                 print(f"  Frame {frame_idx}/{total_frames}", end="\r")
 
             frame_idx += 1
+    finally:
+        pose_landmarker.close()
+        hand_landmarker.close()
 
     cap.release()
 
@@ -127,7 +175,7 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
 def main():
     parser = argparse.ArgumentParser(description="Extract pose and hand landmarks from video")
     parser.add_argument("--video", required=True, help="Path to video file or directory (with --batch)")
-    parser.add_argument("--batch", action="store_true", help="Process all .mp4 files in directory")
+    parser.add_argument("--batch", action="store_true", help="Process all video files in directory")
     parser.add_argument("--output-dir", default="data/landmarks", help="Output directory for CSVs")
     args = parser.parse_args()
 

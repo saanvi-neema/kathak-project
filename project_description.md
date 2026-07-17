@@ -9,7 +9,7 @@
 ### Phase 1: Pose and Landmark Extraction
 Goal: convert Kathak videos into structured motion data.
 
-- Body pose: MediaPipe Pose, MoveNet, YOLO-Pose
+- Body pose: MediaPipe Pose (chosen — passed pilot; MoveNet and YOLO-Pose dropped, see pilot notes below)
 - Hand landmarks: MediaPipe Hands (21 landmarks/hand: wrist, thumb/index/middle/ring/pinky joints)
 - Optional future: facial landmarks for head orientation / expression
 
