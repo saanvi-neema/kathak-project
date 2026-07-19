@@ -2,6 +2,40 @@
 
 This project has multiple separate pilot experiments (see project_description.md for the full list). Each section below documents what was actually done for one experiment, in plain language, so it's clear later what was tested and how.
 
+## The Vertical Stack: How the Full Pipeline Fits Together
+
+The end goal: upload one performance video, get back a dashboard app with a detailed, timestamped critique — e.g. *"At 0:42, your chakkar did not end facing front, you did about 3.75 spins instead of 4. At 1:10, your movements were not on beat. You ended the piece about 1 second before the ending beat. At 1:35, your tatkaar was off-beat."* The deliverable format was undecided for a long time; it's now settled as an app (a dashboard mockup was used as the target reference), not a paper.
+
+### Processing pipeline
+
+1. **Extract landmarks.** MediaPipe finds body and hand joint positions in every frame. **Built, working.**
+
+2. **Extract features.** Turn raw joint positions into actual measurements: joint angles, torso tilt, left/right symmetry, velocity/acceleration (body); finger curl, thumb-to-fingertip distances, finger spread (hands); foot position/trajectory (feet). **Body and hands built. Footwork built but never tested on real tatkaar footage — none has been recorded yet.**
+
+3. **Chakkar analysis.** Count rotations from the shoulder-angle signal. **Counting itself is proven** — exact match on 1/3/10-spin test clips, no drift even at speed. Still to build: round the raw count to the nearest clean landing and report the gap (no external answer key needed — chakkar sequences are choreographed to land clean, so a messy number like 3.75 is itself evidence of an error, not a legitimate target); check the ending shoulder-angle against "front"; check whether the stop was a controlled slowdown or an abrupt cutoff, to confirm a flagged gap is a real error and not measurement noise.
+
+4. **Mudra analysis.** Compare the hand geometry measured in step 2 against a reference definition of what each mudra should look like (e.g. "in Pataka, thumb tip should be near the palm, other four fingers straight and together"), and flag mismatches like *"your thumb was not connected to your palm as it should be in Pataka."* **This one is genuinely stuck, not just unbuilt**: it needs (a) reference geometric rules written for each mudra, and (b) ground-truth timestamps mapping the recorded mudra clip's frames to mudra names — attempted via audio onset detection and hand-motion plateau detection, neither worked cleanly, so this still needs a manual scrub of the clip (never finished).
+
+5. **Rhythm & beat detection.** Find the music's beat grid and its repeating rhythmic cycle (the taal) directly from the instrumental audio track — no spoken cues needed. **Not built yet, but no open unknowns** — this is shared infrastructure the next two steps use.
+
+6. **Movement timing check.** Compare movement timing (from step 2) and the piece's ending time against step 5's beat grid → *"your movements were not on beat,"* *"you ended 1 second before the ending beat."* **Not built, no blockers.**
+
+7. **Tatkaar analysis.** Compare foot-strike timestamps (from step 2's foot data, or audio onset detection) against step 5's beat grid → *"your tatkaar was off-beat."* **Not built. Blocked on actually having tatkaar footage — none recorded yet.**
+
+8. **Report assembly.** Collect every flag from steps 3/4/6/7, sort by timestamp, output the plain-English list. **Not built, pure formatting** — no new modeling needed.
+
+**Explicitly separate, not part of this pipeline:** comparing metrics across multiple different dancers, and training an ML model on that comparison. Only relevant if a multi-dancer dataset gets built later — never required to analyze one uploaded video.
+
+### App layer (dashboard)
+
+An AI-generated mockup was used as the target reference for the app's shape: a sidebar-tabbed dashboard, not a plain text report. Each tab pulls from specific pipeline steps above:
+
+- **Overview** — aggregate scores per category (e.g. "Mudra Accuracy: 92%", "Chakkar Count: 7", "Overall Score: 87%"). **New requirement the mockup surfaced**: turning a list of flagged errors into a single percentage needs an actual formula (e.g. mudra accuracy = correct mudras ÷ total mudras checked) — that formula doesn't exist yet and needs to be designed, not assumed.
+- **Pose View** — raw skeleton overlay drawn on the video. Already built (used for pilot QA overlays), just needs exposing in the app.
+- **Mudra Analysis / Tatkaar Analysis / Chakkar Analysis tabs** — pull directly from pipeline steps 4 / 7 / 3.
+- **Comparison** — not scoped yet, may get cut. If kept, needs deciding whether it means comparing a performance to your own past takes (simple, needs only your own video history) or comparing across other dancers/skill levels (the separate multi-dancer track above, much harder).
+- **Reports** — the detailed timestamped critique, pipeline step 8's output.
+
 ## Chakkar Pilot Test (Experiment 2 — can we count spins?)
 
 1. Got the actual video files onto disk. You'd said "downloaded videos" but that's a browser action — nothing lands in a project folder automatically. I found them in your Downloads folder and copied them into dance-project/data/raw/ so there'd be stable file paths to work with.
