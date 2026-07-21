@@ -129,15 +129,15 @@ MUDRA_RULES = {
         "description": "Pataka with the fingers bent slightly (less straight than Pataka).",
     },
     "mrigasheesh": {
-        "extended": ["index", "middle", "ring", "pinky", "thumb"],
-        "curled": [],
-        "description": "Sarpasheesh with the little finger and thumb stretched upright.",
+        "extended": ["pinky", "thumb"],
+        "curled": ["index", "middle", "ring"],
+        "description": "Sarpasheesh with the little finger and thumb stretched upright, other fingers bent.",
     },
     "singhamukh": {
-        "curled": ["index"],
-        "extended": ["ring", "pinky"],
-        "thumb_touches": "middle",
-        "description": "Middle finger and thumb joined, ring and pinky spread, index folded.",
+        "curled": ["middle", "ring"],
+        "extended": ["index", "pinky"],
+        "thumb_touches": ["middle", "ring"],
+        "description": "Middle and ring finger folded in to join the thumb; index and pinky spread apart.",
     },
     "kangul": {
         "extended": ["index", "middle", "pinky"],
@@ -180,7 +180,7 @@ MUDRA_RULES = {
     "mukul": {
         "extended": [],
         "curled": ["index", "middle", "ring", "pinky"],
-        "thumb_touches": "index",
+        "thumb_touches": ["index", "middle", "ring", "pinky"],
         "description": "All fingertips joined together into a point.",
     },
     "tamrachud": {

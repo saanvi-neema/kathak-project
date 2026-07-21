@@ -77,7 +77,40 @@ def mean_phase(phases):
     return (mean_angle / (2 * np.pi)) % 1.0
 
 
-def windowed_sync_check(event_times, beat_times, clip_duration, window_sec=8.0, step_sec=2.0, min_events=5, alpha=0.05):
+def subdivision_rayleigh_test(phases, max_subdivision=4):
+    """
+    Like rayleigh_test(), but also checks whether events are synchronized to
+    a rhythmic SUBDIVISION of the beat (2 strikes per beat, 3, 4, ...), not
+    just landing once per beat. Fast tatkaar commonly hits multiple evenly-
+    spaced times per beat -- a plain single-phase Rayleigh test would wrongly
+    read that as "unsynchronized" because the strikes spread across more than
+    one cluster point, even though the pattern is tight and real.
+
+    For subdivision k, phase*k mod 1 maps k evenly-spaced cluster points onto
+    one, so a genuinely k-per-beat pattern shows up as tight clustering at
+    that k. Tries k=1..max_subdivision and keeps whichever fits best.
+
+    Testing multiple k values and keeping the best result inflates the
+    chance of a false positive (more rolls of the dice = more likely one
+    looks significant by chance), so the reported p-value is Bonferroni-
+    corrected: multiplied by max_subdivision, capped at 1.0.
+    """
+    if len(phases) < 2:
+        return {"subdivision": 1, "R": 0.0, "p_raw": 1.0, "p_value": 1.0}
+
+    results = []
+    for k in range(1, max_subdivision + 1):
+        sub_phases = (phases * k) % 1.0
+        R, p = rayleigh_test(sub_phases)
+        results.append({"subdivision": k, "R": R, "p_raw": p})
+
+    best = min(results, key=lambda r: r["p_raw"])
+    best["p_value"] = min(1.0, best["p_raw"] * max_subdivision)
+    return best
+
+
+def windowed_sync_check(event_times, beat_times, clip_duration, window_sec=8.0, step_sec=2.0,
+                         min_events=5, alpha=0.05, max_subdivision=4):
     """
     Run the synchronization check in overlapping time windows instead of once
     over the whole clip. Not all movement is meant to be on-beat (expressive/
@@ -86,6 +119,11 @@ def windowed_sync_check(event_times, beat_times, clip_duration, window_sec=8.0, 
     rhythmic sections. Phases are still computed against the FULL beat grid
     (not a windowed one) so events near a window's edge aren't measured
     against an artificially truncated beat interval.
+
+    Uses subdivision_rayleigh_test() per window so a window where the
+    dancer sped up to double/triple-time footwork still reads as
+    synchronized, instead of being wrongly flagged just because the strikes
+    no longer land once-per-beat.
 
     Returns a list of per-window results, each also carrying the window's
     center time (for reporting "at X seconds, movements were on beat / not").
@@ -100,31 +138,37 @@ def windowed_sync_check(event_times, beat_times, clip_duration, window_sec=8.0, 
         if len(window_events) >= min_events:
             phases = compute_phases(window_events, beat_times)
             if len(phases) >= min_events:
-                R, p = rayleigh_test(phases)
+                best = subdivision_rayleigh_test(phases, max_subdivision=max_subdivision)
+                synchronized = best["p_value"] < alpha
                 results.append({
                     "window_start": t,
                     "window_end": t + window_sec,
                     "window_center": t + window_sec / 2,
                     "n": len(phases),
-                    "R": R,
-                    "p_value": p,
-                    "synchronized": p < alpha,
-                    "mean_phase": mean_phase(phases) if p < alpha else None,
+                    "subdivision": best["subdivision"],
+                    "R": best["R"],
+                    "p_value": best["p_value"],
+                    "synchronized": synchronized,
                 })
         t += step_sec
     return results
 
 
-def describe(phases, alpha=0.05):
-    R, p = rayleigh_test(phases)
-    result = {"n": len(phases), "R": R, "p_value": p, "synchronized": p < alpha}
+def describe(phases, alpha=0.05, max_subdivision=4):
+    best = subdivision_rayleigh_test(phases, max_subdivision=max_subdivision)
+    k, R, p = best["subdivision"], best["R"], best["p_value"]
+    result = {"n": len(phases), "subdivision": k, "R": R, "p_value": p, "synchronized": p < alpha}
     if p < alpha:
-        result["mean_phase"] = mean_phase(phases)
+        sub_phases = (phases * k) % 1.0
+        result["mean_phase"] = mean_phase(sub_phases)
         pct = result["mean_phase"] * 100
-        print(f"Movements ARE synchronized to the beat (p={p:.4f}, R={R:.3f}, n={len(phases)}).")
-        print(f"They tend to land about {pct:.0f}% of the way through each beat interval "
-              f"({'right on the beat' if pct < 10 or pct > 90 else 'not exactly on the beat, but consistently offset'}).")
+        rate = "once" if k == 1 else f"{k} times evenly"
+        print(f"Movements ARE synchronized to the beat (p={p:.4f}, R={R:.3f}, n={len(phases)}, "
+              f"landing {rate} per beat).")
+        print(f"Within that, they tend to land about {pct:.0f}% of the way through each interval "
+              f"({'right on it' if pct < 10 or pct > 90 else 'consistently offset from it'}).")
     else:
-        print(f"No evidence of synchronization to the beat (p={p:.4f}, R={R:.3f}, n={len(phases)}) "
+        print(f"No evidence of synchronization to the beat at any subdivision tested "
+              f"(best fit: {k}x/beat, p={p:.4f}, R={R:.3f}, n={len(phases)}) "
               f"-- movement timing looks statistically indistinguishable from random relative to this beat grid.")
     return result
