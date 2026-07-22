@@ -35,12 +35,16 @@
       <section id="results" class="hidden">
         <div id="tab-overview" class="tab-panel">
           <h2>Overview</h2>
-          <div class="score-grid" id="overview-cards"></div>
+          <div class="overview-layout">
+            <video id="overview-video" controls></video>
+            <div class="score-grid" id="overview-cards"></div>
+          </div>
         </div>
 
         <div id="tab-pose" class="tab-panel hidden">
           <h2>Pose View</h2>
-          <p class="subtext">Skeleton overlay isn't wired into the dashboard yet -- the underlying drawing code exists from the pilot scripts, just not exposed here.</p>
+          <p class="subtext" id="pose-note">Skeleton overlay on the tracked body + hand joints.</p>
+          <video id="pose-video" controls></video>
         </div>
 
         <div id="tab-mudra" class="tab-panel hidden">

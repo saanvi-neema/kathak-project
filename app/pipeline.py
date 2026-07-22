@@ -32,6 +32,130 @@ from score_aggregation import chakkar_quality_score, timing_accuracy_score, over
 
 MIN_ROTATION_DEG_FOR_CHAKKAR = 180  # below this, don't bother scoring "chakkar quality"
 
+# Same BlazePose connection subset used in the pilot scripts' overlay drawing.
+BODY_CONNECTIONS = [
+    ("nose", "left_shoulder"), ("nose", "right_shoulder"),
+    ("left_shoulder", "right_shoulder"), ("left_shoulder", "left_elbow"), ("left_elbow", "left_wrist"),
+    ("right_shoulder", "right_elbow"), ("right_elbow", "right_wrist"),
+    ("left_shoulder", "left_hip"), ("right_shoulder", "right_hip"), ("left_hip", "right_hip"),
+    ("left_hip", "left_knee"), ("left_knee", "left_ankle"), ("left_ankle", "left_heel"),
+    ("left_ankle", "left_foot_index"), ("left_heel", "left_foot_index"),
+    ("right_hip", "right_knee"), ("right_knee", "right_ankle"), ("right_ankle", "right_heel"),
+    ("right_ankle", "right_foot_index"), ("right_heel", "right_foot_index"),
+]
+
+# Standard 21-point MediaPipe Hands connections.
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (17, 18), (18, 19), (19, 20),
+    (0, 17),
+]
+
+
+BODY_JOINT_NAMES = sorted({name for pair in BODY_CONNECTIONS for name in pair})
+
+
+def _draw_body_skeleton(canvas, row, w, h):
+    for a, b in BODY_CONNECTIONS:
+        ax, ay = row.get(f"body_{a}_x"), row.get(f"body_{a}_y")
+        bx, by = row.get(f"body_{b}_x"), row.get(f"body_{b}_y")
+        if pd.notna(ax) and pd.notna(ay) and pd.notna(bx) and pd.notna(by):
+            cv2.line(canvas, (int(ax * w), int(ay * h)), (int(bx * w), int(by * h)), (109, 91, 208), 4)
+    # Only the joints actually used in BODY_CONNECTIONS -- not every raw
+    # BlazePose point (which would include face landmarks and clutter what's
+    # supposed to read as a clean stick figure).
+    for name in BODY_JOINT_NAMES:
+        x, y = row.get(f"body_{name}_x"), row.get(f"body_{name}_y")
+        if pd.notna(x) and pd.notna(y):
+            radius = 16 if name == "nose" else 7  # draw the head bigger so it actually reads as a head
+            cv2.circle(canvas, (int(x * w), int(y * h)), radius, (109, 91, 208), -1)
+
+
+def _draw_hand_skeleton(canvas, row, w, h):
+    for side in ["left", "right"]:
+        if f"hand_{side}_0_x" not in row.index:
+            continue
+        pts = []
+        for i in range(21):
+            x, y = row.get(f"hand_{side}_{i}_x"), row.get(f"hand_{side}_{i}_y")
+            pts.append((int(x * w), int(y * h)) if pd.notna(x) and pd.notna(y) else None)
+        for a, b in HAND_CONNECTIONS:
+            if pts[a] and pts[b]:
+                cv2.line(canvas, pts[a], pts[b], (6, 119, 217), 3)
+        for p in pts:
+            if p:
+                cv2.circle(canvas, p, 4, (6, 119, 217), -1)
+
+
+DROPOUT_HOLD_FRAMES = 6  # ~0.2s at 30fps -- brief tracking loss holds last position; longer gaps stay missing
+
+
+def _smooth_dropouts(df):
+    """
+    Landmark tracking briefly drops a joint here and there even in a mostly-
+    good clip (confirmed directly: legs vanished for a few frames mid-clip
+    on a fast-spin test video while everything else stayed tracked). Without
+    smoothing, that reads as limbs randomly flickering in and out on the
+    skeleton view. Hold the last known position for a short gap -- a real,
+    sustained loss of tracking still shows as the limb disappearing, this
+    only papers over brief single/few-frame blips.
+    """
+    coord_cols = [c for c in df.columns if c.endswith("_x") or c.endswith("_y") or c.endswith("_z")]
+    df = df.copy()
+    df[coord_cols] = df[coord_cols].ffill(limit=DROPOUT_HOLD_FRAMES)
+    return df
+
+
+def generate_pose_overlay(video_path, landmarks_csv, output_path):
+    """
+    Draws the body + hand skeleton (from the already-extracted landmarks CSV,
+    not a fresh MediaPipe pass) on top of the real video frames. Writes an
+    intermediate mp4v file, then re-encodes to H.264 -- mp4v (OpenCV's
+    default) isn't reliably playable in a browser <video> tag, H.264 is.
+    """
+    df = pd.read_csv(landmarks_csv)
+    df = _smooth_dropouts(df)
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    raw_path = output_path + ".raw.mp4"
+    writer = cv2.VideoWriter(raw_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+
+    frame_idx = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_idx < len(df):
+            row = df.iloc[frame_idx]
+            _draw_body_skeleton(frame, row, w, h)
+            _draw_hand_skeleton(frame, row, w, h)
+        writer.write(frame)
+        frame_idx += 1
+
+    cap.release()
+    writer.release()
+
+    # -vsync cfr + fixed -g (keyframe interval) forces a truly constant frame
+    # rate with regular keyframes -- without this, browsers can play the
+    # video fine start-to-finish once but corrupt/blank out on seek or
+    # replay, a known issue with programmatically-generated H.264.
+    gop = max(1, int(round(fps)))
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    result = subprocess.run(
+        [ffmpeg, "-y", "-i", raw_path, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-r", str(fps), "-vsync", "cfr", "-g", str(gop), "-keyint_min", str(gop),
+         "-movflags", "+faststart", output_path],
+        capture_output=True,
+    )
+    os.remove(raw_path)
+    return result.returncode == 0 and os.path.exists(output_path)
+
 
 def get_video_duration(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -162,6 +286,10 @@ def analyze_video(video_path, work_dir):
     chakkar = run_chakkar_analysis(landmarks_csv)
     timing = run_timing_analysis(video_path, features_csv, duration_sec)
 
+    overlay_filename = "pose_overlay.mp4"
+    overlay_path = os.path.join(work_dir, overlay_filename)
+    overlay_ok = generate_pose_overlay(video_path, landmarks_csv, overlay_path)
+
     all_flags = []
     if chakkar:
         all_flags.extend(chakkar["flags"])
@@ -182,4 +310,5 @@ def analyze_video(video_path, work_dir):
         "mudra": None,  # honestly not run -- no automatic mudra identification exists yet
         "overall_score": overall,
         "report_lines": report_lines,
+        "overlay_video_filename": overlay_filename if overlay_ok else None,
     }

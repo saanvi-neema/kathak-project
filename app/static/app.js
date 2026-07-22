@@ -59,9 +59,35 @@ function renderResults(data) {
   renderTiming(data.timing);
   renderMudra(data.mudra);
   renderReports(data.report_lines);
+  renderPoseView(data);
+}
+
+function mediaUrl(sessionId, filename) {
+  return `/media/${sessionId}/${encodeURIComponent(filename)}`;
+}
+
+function renderPoseView(data) {
+  const video = document.getElementById("pose-video");
+  const note = document.getElementById("pose-note");
+  if (data.overlay_video_filename && data.session_id) {
+    video.src = mediaUrl(data.session_id, data.overlay_video_filename);
+    video.classList.remove("hidden");
+    note.textContent = "Skeleton overlay on the tracked body + hand joints.";
+  } else {
+    video.classList.add("hidden");
+    note.textContent = "Couldn't generate a skeleton overlay for this video.";
+  }
 }
 
 function renderOverview(data) {
+  const video = document.getElementById("overview-video");
+  if (data.original_video_filename && data.session_id) {
+    video.src = mediaUrl(data.session_id, data.original_video_filename);
+    video.classList.remove("hidden");
+  } else {
+    video.classList.add("hidden");
+  }
+
   const container = document.getElementById("overview-cards");
   container.innerHTML = "";
 

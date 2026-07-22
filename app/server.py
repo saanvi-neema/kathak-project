@@ -11,7 +11,7 @@ import dataclasses
 import os
 import uuid
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from pipeline import analyze_video
 
@@ -47,7 +47,15 @@ def analyze():
     except Exception as e:
         return jsonify({"error": f"Analysis failed: {e}"}), 500
 
+    results["session_id"] = session_id
+    results["original_video_filename"] = video_file.filename
     return jsonify(serialize_results(results))
+
+
+@app.route("/media/<session_id>/<filename>")
+def media(session_id, filename):
+    session_dir = os.path.join(UPLOAD_DIR, session_id)
+    return send_from_directory(session_dir, filename)
 
 
 def serialize_results(results):

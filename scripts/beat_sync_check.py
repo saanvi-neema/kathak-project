@@ -94,6 +94,13 @@ def subdivision_rayleigh_test(phases, max_subdivision=4):
     chance of a false positive (more rolls of the dice = more likely one
     looks significant by chance), so the reported p-value is Bonferroni-
     corrected: multiplied by max_subdivision, capped at 1.0.
+
+    A genuine k-per-beat pattern is mathematically also a valid fit at any
+    multiple of k (e.g. a perfect 2x/beat pattern also looks like a perfect
+    4x/beat pattern, since 2 divides evenly into 4) -- so when multiple
+    subdivisions fit comparably well, the smallest one is preferred as the
+    simpler, more parsimonious description, rather than picking whichever
+    has a marginally lower p-value by numerical coincidence.
     """
     if len(phases) < 2:
         return {"subdivision": 1, "R": 0.0, "p_raw": 1.0, "p_value": 1.0}
@@ -104,7 +111,10 @@ def subdivision_rayleigh_test(phases, max_subdivision=4):
         R, p = rayleigh_test(sub_phases)
         results.append({"subdivision": k, "R": R, "p_raw": p})
 
-    best = min(results, key=lambda r: r["p_raw"])
+    best_p_raw = min(r["p_raw"] for r in results)
+    TIE_TOLERANCE = 1e-9
+    tied = [r for r in results if r["p_raw"] <= best_p_raw + TIE_TOLERANCE]
+    best = min(tied, key=lambda r: r["subdivision"])
     best["p_value"] = min(1.0, best["p_raw"] * max_subdivision)
     return best
 
