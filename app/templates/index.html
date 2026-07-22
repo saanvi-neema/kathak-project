@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kathak Analysis Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="brand">Kathak Analysis</div>
+      <ul class="tabs">
+        <li class="tab active" data-tab="overview">Overview</li>
+        <li class="tab" data-tab="pose">Pose View</li>
+        <li class="tab" data-tab="mudra">Mudra Analysis</li>
+        <li class="tab" data-tab="tatkaar">Tatkaar Analysis</li>
+        <li class="tab" data-tab="chakkar">Chakkar Analysis</li>
+        <li class="tab disabled" data-tab="comparison">Comparison<span class="badge">soon</span></li>
+        <li class="tab" data-tab="reports">Reports</li>
+      </ul>
+    </nav>
+
+    <main class="content">
+      <section id="upload-panel" class="panel">
+        <h1>Upload a performance video</h1>
+        <p class="subtext">Get a timestamped breakdown of your chakkars and timing.</p>
+        <form id="upload-form">
+          <input type="file" id="video-input" name="video" accept="video/*" required>
+          <button type="submit">Analyze</button>
+        </form>
+        <div id="status" class="status"></div>
+      </section>
+
+      <section id="results" class="hidden">
+        <div id="tab-overview" class="tab-panel">
+          <h2>Overview</h2>
+          <div class="score-grid" id="overview-cards"></div>
+        </div>
+
+        <div id="tab-pose" class="tab-panel hidden">
+          <h2>Pose View</h2>
+          <p class="subtext">Skeleton overlay isn't wired into the dashboard yet -- the underlying drawing code exists from the pilot scripts, just not exposed here.</p>
+        </div>
+
+        <div id="tab-mudra" class="tab-panel hidden">
+          <h2>Mudra Analysis</h2>
+          <p class="subtext" id="mudra-note"></p>
+        </div>
+
+        <div id="tab-tatkaar" class="tab-panel hidden">
+          <h2>Tatkaar Analysis</h2>
+          <div id="tatkaar-content"></div>
+        </div>
+
+        <div id="tab-chakkar" class="tab-panel hidden">
+          <h2>Chakkar Analysis</h2>
+          <div id="chakkar-content"></div>
+        </div>
+
+        <div id="tab-comparison" class="tab-panel hidden">
+          <h2>Comparison</h2>
+          <p class="subtext">Not scoped yet.</p>
+        </div>
+
+        <div id="tab-reports" class="tab-panel hidden">
+          <h2>Reports</h2>
+          <ul id="report-list" class="report-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

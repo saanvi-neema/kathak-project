@@ -47,20 +47,34 @@ def count_checked_constraints(rule):
     return n
 
 
-def chakkar_quality_score(score_result, uncontrolled_stop_penalty_score=60):
+def chakkar_quality_score(score_result, count_gap_threshold=0.05, orientation_threshold_deg=15,
+                           uncontrolled_stop_penalty_score=60):
     """
     score_result: output of chakkar_scoring.score_chakkar() for one chakkar
     sequence. Returns a 0-100 score combining count accuracy, ending
     orientation, and stop quality.
 
-    Scaling choices (not derived from data): a full rotation of count error
-    or a full 180-degree orientation error each cost the full 100 points;
-    an uncontrolled stop costs a flat penalty rather than scaling with
-    anything, since "controlled vs. not" is currently binary, not a measured
-    continuum.
+    Deviations below the same thresholds report_assembly.py uses to decide
+    whether something is even worth flagging score as a perfect 100 --
+    matches the recorded feedback that a performance which reads as "clean"
+    to a dancer's own eye shouldn't lose points for sub-perceptible
+    measurement noise. Points only start coming off once a deviation is
+    large enough that it would actually generate a flag; from there, the
+    exact scaling (a full rotation or a full 180 degrees costing the rest
+    of the 100 points) is still a reasonable default, not derived from data.
     """
-    count_score = max(0.0, 100 - abs(score_result["count_gap"]) * 100)
-    orientation_score = max(0.0, 100 - abs(score_result["orientation_gap_deg"]) / 1.8)
+    count_gap = abs(score_result["count_gap"])
+    if count_gap <= count_gap_threshold:
+        count_score = 100.0
+    else:
+        count_score = max(0.0, 100 - (count_gap - count_gap_threshold) * 100)
+
+    orientation_gap = abs(score_result["orientation_gap_deg"])
+    if orientation_gap <= orientation_threshold_deg:
+        orientation_score = 100.0
+    else:
+        orientation_score = max(0.0, 100 - (orientation_gap - orientation_threshold_deg) / 1.8)
+
     stop_score = 100.0 if score_result["controlled_stop"] else uncontrolled_stop_penalty_score
     return float(np.mean([count_score, orientation_score, stop_score]))
 
