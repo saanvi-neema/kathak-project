@@ -12,6 +12,7 @@ import os
 import uuid
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
+from werkzeug.utils import secure_filename
 
 from pipeline import analyze_video
 
@@ -32,14 +33,15 @@ def analyze():
         return jsonify({"error": "No video file uploaded."}), 400
 
     video_file = request.files["video"]
-    if not video_file.filename:
+    filename = secure_filename(video_file.filename)
+    if not filename:
         return jsonify({"error": "No video file selected."}), 400
 
     session_id = uuid.uuid4().hex[:12]
     session_dir = os.path.join(UPLOAD_DIR, session_id)
     os.makedirs(session_dir, exist_ok=True)
 
-    video_path = os.path.join(session_dir, video_file.filename)
+    video_path = os.path.join(session_dir, filename)
     video_file.save(video_path)
 
     try:
@@ -48,7 +50,7 @@ def analyze():
         return jsonify({"error": f"Analysis failed: {e}"}), 500
 
     results["session_id"] = session_id
-    results["original_video_filename"] = video_file.filename
+    results["original_video_filename"] = filename
     return jsonify(serialize_results(results))
 
 

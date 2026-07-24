@@ -20,8 +20,9 @@ function fmtScore(value) {
 }
 
 function formatTime(sec) {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
+  const total = Math.round(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
@@ -94,10 +95,11 @@ function renderOverview(data) {
   container.innerHTML += scoreRingCard("Overall Score", data.overall_score);
 
   if (data.chakkar) {
+    const chakkarQuality = data.chakkar.quality_score;
     container.innerHTML += `
       <div class="score-card">
         <div class="label">Chakkar Quality</div>
-        <div class="value ${scoreClass(data.chakkar.quality_score)}">${fmtScore(data.chakkar.quality_score)}%</div>
+        <div class="value ${scoreClass(chakkarQuality)}">${fmtScore(chakkarQuality)}${chakkarQuality !== null && chakkarQuality !== undefined ? "%" : ""}</div>
       </div>
       <div class="score-card">
         <div class="label">Chakkar Count</div>
@@ -108,10 +110,11 @@ function renderOverview(data) {
   container.innerHTML += tempoCircleCard(data.timing ? data.timing.tempo_bpm : null);
 
   if (data.timing) {
+    const timingAccuracy = data.timing.accuracy_score;
     container.innerHTML += `
       <div class="score-card">
         <div class="label">Timing Accuracy</div>
-        <div class="value ${scoreClass(data.timing.accuracy_score)}">${fmtScore(data.timing.accuracy_score)}%</div>
+        <div class="value ${scoreClass(timingAccuracy)}">${fmtScore(timingAccuracy)}${timingAccuracy !== null && timingAccuracy !== undefined ? "%" : ""}</div>
       </div>`;
   }
 
