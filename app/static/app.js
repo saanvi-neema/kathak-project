@@ -91,12 +91,7 @@ function renderOverview(data) {
   const container = document.getElementById("overview-cards");
   container.innerHTML = "";
 
-  const overallVal = data.overall_score;
-  container.innerHTML += `
-    <div class="score-card">
-      <div class="label">Overall Score</div>
-      <div class="value ${scoreClass(overallVal)}">${fmtScore(overallVal)}${overallVal !== null ? "%" : ""}</div>
-    </div>`;
+  container.innerHTML += scoreRingCard("Overall Score", data.overall_score);
 
   if (data.chakkar) {
     container.innerHTML += `
@@ -110,21 +105,54 @@ function renderOverview(data) {
       </div>`;
   }
 
+  container.innerHTML += tempoCircleCard(data.timing ? data.timing.tempo_bpm : null);
+
   if (data.timing) {
     container.innerHTML += `
       <div class="score-card">
         <div class="label">Timing Accuracy</div>
         <div class="value ${scoreClass(data.timing.accuracy_score)}">${fmtScore(data.timing.accuracy_score)}%</div>
-      </div>
-      <div class="score-card">
-        <div class="label">Tempo</div>
-        <div class="value">${Math.round(data.timing.tempo_bpm)} BPM</div>
       </div>`;
   }
 
   if (!data.chakkar && !data.timing) {
-    container.innerHTML = `<div class="empty-state">No chakkar or timing signal detected in this clip.</div>`;
+    container.innerHTML += `<div class="empty-state">No chakkar or timing signal detected in this clip.</div>`;
   }
+}
+
+function scoreColorVar(value) {
+  if (value === null || value === undefined) return "var(--border)";
+  if (value >= 85) return "var(--good)";
+  if (value >= 60) return "var(--warn)";
+  return "var(--bad)";
+}
+
+function scoreRingCard(label, value) {
+  const hasValue = value !== null && value !== undefined;
+  const pct = hasValue ? Math.max(0, Math.min(100, value)) : 0;
+  const display = hasValue ? `${fmtScore(value)}%` : "N/A";
+  return `
+    <div class="score-card score-card-circular">
+      <div class="label">${label}</div>
+      <div class="ring" style="--pct: ${pct}; --ring-color: ${scoreColorVar(value)}">
+        <div class="ring-inner">
+          <span class="ring-value">${display}</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+function tempoCircleCard(bpm) {
+  const hasValue = bpm !== null && bpm !== undefined && !Number.isNaN(bpm);
+  return `
+    <div class="score-card score-card-circular">
+      <div class="label">Tatkaar Tempo</div>
+      <div class="circle-badge ${hasValue ? "" : "circle-badge-empty"}">
+        ${hasValue
+          ? `<span class="circle-value">${Math.round(bpm)}</span><span class="circle-unit">BPM</span>`
+          : `<span class="circle-value">N/A</span>`}
+      </div>
+    </div>`;
 }
 
 function renderChakkar(chakkar) {
@@ -167,6 +195,31 @@ function renderMudra(mudra) {
   const note = document.getElementById("mudra-note");
   note.textContent = "Mudra analysis isn't run automatically on arbitrary uploads yet -- the checker can verify a NAMED mudra's shape, but there's no classifier to identify which mudra is happening at a given moment without ground-truth timestamps. This tab will populate once that piece exists.";
 }
+
+function bindComparisonFileLabel(inputId, labelId) {
+  const input = document.getElementById(inputId);
+  const label = document.getElementById(labelId);
+  input.addEventListener("change", () => {
+    label.textContent = input.files.length ? input.files[0].name : "No file selected";
+  });
+}
+bindComparisonFileLabel("teacher-video-input", "teacher-video-filename");
+bindComparisonFileLabel("student-video-input", "student-video-filename");
+
+document.getElementById("comparison-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const teacherInput = document.getElementById("teacher-video-input");
+  const studentInput = document.getElementById("student-video-input");
+  const status = document.getElementById("comparison-status");
+
+  if (!teacherInput.files.length || !studentInput.files.length) {
+    status.textContent = "Select both a teacher video and your own video to compare.";
+    return;
+  }
+
+  status.textContent = "Comparison analysis isn't built yet -- this is a UI preview of the upload flow only. " +
+    "See methods.md for what it's scoped to do once the alignment + event-detection pieces exist.";
+});
 
 function renderFlagList(flags) {
   if (!flags || flags.length === 0) {

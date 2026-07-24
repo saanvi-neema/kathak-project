@@ -16,7 +16,7 @@
         <li class="tab" data-tab="mudra">Mudra Analysis</li>
         <li class="tab" data-tab="tatkaar">Tatkaar Analysis</li>
         <li class="tab" data-tab="chakkar">Chakkar Analysis</li>
-        <li class="tab disabled" data-tab="comparison">Comparison<span class="badge">soon</span></li>
+        <li class="tab" data-tab="comparison">Comparison<span class="badge">preview</span></li>
         <li class="tab" data-tab="reports">Reports</li>
       </ul>
     </nav>
@@ -64,7 +64,23 @@
 
         <div id="tab-comparison" class="tab-panel hidden">
           <h2>Comparison</h2>
-          <p class="subtext">Not scoped yet.</p>
+          <p class="subtext">Upload a teacher's performance and your own take on the same piece to get an action-by-action comparison, e.g. "at 0:42, the teacher clapped twice, you only clapped once."</p>
+          <form id="comparison-form" class="comparison-form">
+            <div class="comparison-uploads">
+              <label class="upload-box" for="teacher-video-input">
+                <div class="upload-box-title">Teacher / reference video</div>
+                <input type="file" id="teacher-video-input" name="teacher_video" accept="video/*">
+                <div class="upload-box-filename" id="teacher-video-filename">No file selected</div>
+              </label>
+              <label class="upload-box" for="student-video-input">
+                <div class="upload-box-title">Your video</div>
+                <input type="file" id="student-video-input" name="student_video" accept="video/*">
+                <div class="upload-box-filename" id="student-video-filename">No file selected</div>
+              </label>
+            </div>
+            <button type="submit">Compare performances</button>
+          </form>
+          <div id="comparison-status" class="status"></div>
         </div>
 
         <div id="tab-reports" class="tab-panel hidden">
