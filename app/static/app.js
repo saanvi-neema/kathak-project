@@ -1,10 +1,29 @@
+let hasAnalyzedVideo = false;
+
 const tabs = document.querySelectorAll(".tab:not(.disabled)");
 tabs.forEach(tab => {
   tab.addEventListener("click", () => {
     tabs.forEach(t => t.classList.remove("active"));
     tab.classList.add("active");
     document.querySelectorAll(".tab-panel").forEach(p => p.classList.add("hidden"));
-    document.getElementById(`tab-${tab.dataset.tab}`).classList.remove("hidden");
+
+    if (tab.dataset.tab === "comparison") {
+      // Comparison doesn't depend on the single-video Overview analysis --
+      // it's a separate upload flow, so it should work even if no video has
+      // been analyzed yet.
+      document.getElementById("upload-panel").classList.add("hidden");
+      document.getElementById("results").classList.add("hidden");
+      document.getElementById("tab-comparison").classList.remove("hidden");
+    } else if (hasAnalyzedVideo) {
+      document.getElementById("upload-panel").classList.add("hidden");
+      document.getElementById("results").classList.remove("hidden");
+      document.getElementById(`tab-${tab.dataset.tab}`).classList.remove("hidden");
+    } else {
+      // No video analyzed yet and this isn't Comparison -- show the upload
+      // prompt instead of an empty/broken-looking tab.
+      document.getElementById("results").classList.add("hidden");
+      document.getElementById("upload-panel").classList.remove("hidden");
+    }
   });
 });
 
@@ -52,6 +71,7 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
 });
 
 function renderResults(data) {
+  hasAnalyzedVideo = true;
   document.getElementById("upload-panel").classList.add("hidden");
   document.getElementById("results").classList.remove("hidden");
 
@@ -102,8 +122,8 @@ function renderOverview(data) {
         <div class="value ${scoreClass(chakkarQuality)}">${fmtScore(chakkarQuality)}${chakkarQuality !== null && chakkarQuality !== undefined ? "%" : ""}</div>
       </div>
       <div class="score-card">
-        <div class="label">Chakkar Count</div>
-        <div class="value">${data.chakkar.result.rounded_count.toFixed(1)}</div>
+        <div class="label">Chakkars Detected</div>
+        <div class="value">${data.chakkar.event_count}</div>
       </div>`;
   }
 
@@ -164,16 +184,25 @@ function renderChakkar(chakkar) {
     el.innerHTML = `<div class="empty-state">No chakkar (rotation of at least half a turn) detected in this clip.</div>`;
     return;
   }
-  const r = chakkar.result;
   el.innerHTML = `
+    <p class="subtext">${chakkar.event_count} chakkar${chakkar.event_count === 1 ? "" : "s"} detected -- each scored separately, since they're distinct spin events, not one blended average.</p>
+    ${chakkar.events.map(renderChakkarEvent).join("")}
+    <h3>All flags</h3>
+    ${renderFlagList(chakkar.flags)}
+  `;
+}
+
+function renderChakkarEvent(event, index) {
+  const r = event.result;
+  return `
+    <h3>Chakkar ${index + 1} <span class="subtext">(${formatTime(r.start_sec)}&ndash;${formatTime(r.end_sec)})</span></h3>
     <div class="score-grid">
+      <div class="score-card"><div class="label">Quality</div><div class="value ${scoreClass(event.quality_score)}">${fmtScore(event.quality_score)}%</div></div>
       <div class="score-card"><div class="label">Raw count</div><div class="value">${r.raw_count.toFixed(2)}</div></div>
       <div class="score-card"><div class="label">Rounded (clean landing)</div><div class="value">${r.rounded_count.toFixed(1)}</div></div>
       <div class="score-card"><div class="label">Ending orientation gap</div><div class="value">${r.orientation_gap_deg.toFixed(0)}&deg;</div></div>
       <div class="score-card"><div class="label">Stop quality</div><div class="value">${r.controlled_stop ? "Controlled" : "Abrupt"}</div></div>
     </div>
-    <h3>Flags</h3>
-    ${renderFlagList(chakkar.flags)}
   `;
 }
 
@@ -209,20 +238,93 @@ function bindComparisonFileLabel(inputId, labelId) {
 bindComparisonFileLabel("teacher-video-input", "teacher-video-filename");
 bindComparisonFileLabel("student-video-input", "student-video-filename");
 
-document.getElementById("comparison-form").addEventListener("submit", (e) => {
+document.getElementById("comparison-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const teacherInput = document.getElementById("teacher-video-input");
   const studentInput = document.getElementById("student-video-input");
   const status = document.getElementById("comparison-status");
+  const results = document.getElementById("comparison-results");
 
   if (!teacherInput.files.length || !studentInput.files.length) {
     status.textContent = "Select both a teacher video and your own video to compare.";
     return;
   }
 
-  status.textContent = "Comparison analysis isn't built yet -- this is a UI preview of the upload flow only. " +
-    "See methods.md for what it's scoped to do once the alignment + event-detection pieces exist.";
+  const formData = new FormData();
+  formData.append("teacher_video", teacherInput.files[0]);
+  formData.append("student_video", studentInput.files[0]);
+
+  status.textContent = "Comparing... this aligns both videos' audio and can take a minute or two.";
+  results.classList.add("hidden");
+
+  try {
+    const resp = await fetch("/compare", { method: "POST", body: formData });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = `Error: ${data.error || "comparison failed"}`;
+      return;
+    }
+    status.textContent = "";
+    renderComparison(data);
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+  }
 });
+
+function renderComparison(data) {
+  const results = document.getElementById("comparison-results");
+  results.classList.remove("hidden");
+
+  const rateHtml = data.match_rate === null || data.match_rate === undefined
+    ? ""
+    : `<div class="score-grid" style="margin-bottom: 16px;">
+         <div class="score-card">
+           <div class="label">Actions matched</div>
+           <div class="value ${scoreClass(data.match_rate)}">${fmtScore(data.match_rate)}%</div>
+         </div>
+       </div>`;
+
+  const actionsHtml = (data.actions || []).map(a => {
+    const cls = a.match ? "" : "flag-item";
+    const status = a.match ? "match" : "mismatch";
+    return `<div class="${cls}">
+      ${formatTime(a.teacher_time)} (teacher) &rarr; ${formatTime(a.student_time)} (you):
+      teacher had ${a.teacher_count}, you had ${a.student_count} &mdash; ${status}
+    </div>`;
+  }).join("");
+
+  const denseSections = data.dense_sections || [];
+  const extraTeacher = data.extra_teacher_sections || [];
+  const extraStudent = data.extra_student_sections || [];
+  const denseHtml = [
+    ...denseSections.map(d => {
+      const cls = d.match ? "" : "flag-item";
+      const status = d.match ? "match" : "mismatch";
+      return `<div class="${cls}">
+        ${formatTime(d.teacher_time)} (teacher) &rarr; ${formatTime(d.student_time)} (you):
+        teacher did ${d.teacher_count} strikes, you did ${d.student_count} (${d.ratio.toFixed(2)}x) &mdash; ${status}
+      </div>`;
+    }),
+    ...extraTeacher.map(d => `<div class="flag-item">
+      ${formatTime(d.start)} (teacher only): ${d.count} strikes with no matching section in your video
+    </div>`),
+    ...extraStudent.map(d => `<div class="flag-item">
+      ${formatTime(d.start)} (you only): ${d.count} strikes with no matching section in the teacher's video
+    </div>`),
+  ].join("");
+
+  results.innerHTML = `
+    <h3>Summary</h3>
+    ${rateHtml}
+    <h3>Flags</h3>
+    ${renderFlagList(data.flags)}
+    <h3>Rhythmic / tatkaar sections</h3>
+    <p class="subtext">Fast, repeated sections (like tatkaar) are compared by strike count, not matched sound-by-sound -- see methods.md for why.</p>
+    ${denseHtml || '<div class="empty-state">No dense rhythmic sections detected.</div>'}
+    <h3>All matched actions</h3>
+    ${actionsHtml || '<div class="empty-state">No comparable movement-sound actions detected.</div>'}
+  `;
+}
 
 function renderFlagList(flags) {
   if (!flags || flags.length === 0) {

@@ -25,12 +25,11 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from extract_landmarks import extract_landmarks  # noqa: E402
 from extract_features import extract_features  # noqa: E402
-from chakkar_scoring import score_chakkar, describe as describe_chakkar  # noqa: E402
+from chakkar_scoring import score_chakkar_events  # noqa: E402
 from beat_sync_check import windowed_sync_check  # noqa: E402
 from report_assembly import flags_from_chakkar, flags_from_beat_sync, assemble_report  # noqa: E402
 from score_aggregation import chakkar_quality_score, timing_accuracy_score, overall_score  # noqa: E402
-
-MIN_ROTATION_DEG_FOR_CHAKKAR = 180  # below this, don't bother scoring "chakkar quality"
+from comparison import compare_performances  # noqa: E402
 
 # Same BlazePose connection subset used in the pilot scripts' overlay drawing.
 BODY_CONNECTIONS = [
@@ -198,6 +197,17 @@ def build_shoulder_angles(landmarks_csv):
 
 
 def run_chakkar_analysis(landmarks_csv):
+    """
+    Segments the clip into distinct rotation bursts (chakkar_scoring.
+    score_chakkar_events) and scores each independently, instead of
+    unwrapping and scoring the whole clip as a single blended event -- a
+    real piece can contain several separate chakkar phrases with other
+    movement in between, and a single aggregate number for the whole clip
+    hides that (confirmed directly: a real test clip with several distinct
+    spin bursts previously scored as one falsely "clean" result with no
+    flags at all). Returns None if no segment in the clip clears the
+    speed/duration/rotation filters in chakkar_scoring.py.
+    """
     angles_df = build_shoulder_angles(landmarks_csv)
     if angles_df is None:
         return None
@@ -206,22 +216,26 @@ def run_chakkar_analysis(landmarks_csv):
     if len(known) < 2:
         return None
 
-    unwrapped = np.degrees(np.unwrap(np.radians(known["shoulder_angle_deg"].to_numpy())))
-    total_rotation = abs(unwrapped[-1] - unwrapped[0])
-    if total_rotation < MIN_ROTATION_DEG_FOR_CHAKKAR:
-        return None  # not enough rotation in this clip to call it a chakkar
-
     tmp_csv = landmarks_csv + "_angles_tmp.csv"
     angles_df.to_csv(tmp_csv, index=False)
     try:
-        result = score_chakkar(tmp_csv)
+        segment_results = score_chakkar_events(tmp_csv)
     finally:
         os.remove(tmp_csv)
 
-    end_time_sec = angles_df["timestamp_ms"].max() / 1000.0
-    quality = chakkar_quality_score(result)
-    flags = flags_from_chakkar(result, end_time_sec)
-    return {"result": result, "quality_score": quality, "flags": flags, "end_time_sec": end_time_sec}
+    if not segment_results:
+        return None
+
+    events = []
+    all_flags = []
+    for result in segment_results:
+        quality = chakkar_quality_score(result)
+        flags = flags_from_chakkar(result, result["end_sec"])
+        events.append({"result": result, "quality_score": quality, "flags": flags})
+        all_flags.extend(flags)
+
+    overall_quality = float(np.mean([e["quality_score"] for e in events]))
+    return {"events": events, "quality_score": overall_quality, "flags": all_flags, "event_count": len(events)}
 
 
 MIN_AUDIO_RMS = 0.02  # below this, treat it as room noise/silence, not real music
@@ -273,6 +287,66 @@ def run_timing_analysis(video_path, features_csv, duration_sec):
     finally:
         if os.path.exists(wav_path):
             os.remove(wav_path)
+
+
+MIN_COMPARISON_ONSETS = 3  # too few onsets in a track to say anything meaningful about alignment
+
+
+def _onset_signal(video_path, tmp_wav_path):
+    """
+    Extracts audio and computes what run_comparison needs: an onset-strength
+    envelope (used for fastdtw alignment) and discrete onset event times
+    (used for the actual action-by-action count comparison). Same
+    MIN_AUDIO_RMS gate as run_timing_analysis -- a near-silent/room-noise
+    track produces onset artifacts that aren't real signal.
+    """
+    if not extract_audio(video_path, tmp_wav_path):
+        return None
+    try:
+        y, sr = librosa.load(tmp_wav_path, sr=None)
+        rms = librosa.feature.rms(y=y)[0]
+        if float(np.mean(rms)) < MIN_AUDIO_RMS:
+            return None
+        env = librosa.onset.onset_strength(y=y, sr=sr)
+        env_times = librosa.frames_to_time(np.arange(len(env)), sr=sr)
+        onset_times = librosa.onset.onset_detect(y=y, sr=sr, units="time")
+        return {"env": env, "env_times": env_times, "onset_times": onset_times}
+    finally:
+        if os.path.exists(tmp_wav_path):
+            os.remove(tmp_wav_path)
+
+
+def run_comparison(teacher_video_path, student_video_path, work_dir):
+    """
+    Teacher-vs-student comparison (methods.md Comparison tab). Returns None
+    if either track doesn't have enough audio signal to align/compare
+    meaningfully, rather than faking a result.
+    """
+    os.makedirs(work_dir, exist_ok=True)
+    teacher_wav = os.path.join(work_dir, "teacher_audio_tmp.wav")
+    student_wav = os.path.join(work_dir, "student_audio_tmp.wav")
+
+    teacher_signal = _onset_signal(teacher_video_path, teacher_wav)
+    student_signal = _onset_signal(student_video_path, student_wav)
+    if teacher_signal is None or student_signal is None:
+        return None
+    if (len(teacher_signal["onset_times"]) < MIN_COMPARISON_ONSETS
+            or len(student_signal["onset_times"]) < MIN_COMPARISON_ONSETS):
+        return None
+
+    result = compare_performances(
+        teacher_signal["env"], teacher_signal["env_times"], teacher_signal["onset_times"],
+        student_signal["env"], student_signal["env_times"], student_signal["onset_times"],
+    )
+    return {
+        "actions": result["actions"],
+        "dense_sections": result["dense_sections"],
+        "extra_teacher_sections": result["extra_teacher_sections"],
+        "extra_student_sections": result["extra_student_sections"],
+        "match_rate": result["match_rate"],
+        "flags": result["flags"],
+        "report_lines": assemble_report(result["flags"]),
+    }
 
 
 def analyze_video(video_path, work_dir):

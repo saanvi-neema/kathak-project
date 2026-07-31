@@ -14,7 +14,7 @@ import uuid
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
-from pipeline import analyze_video
+from pipeline import analyze_video, run_comparison
 
 APP_DIR = os.path.dirname(__file__)
 UPLOAD_DIR = os.path.join(APP_DIR, "uploads")
@@ -51,6 +51,38 @@ def analyze():
 
     results["session_id"] = session_id
     results["original_video_filename"] = filename
+    return jsonify(serialize_results(results))
+
+
+@app.route("/compare", methods=["POST"])
+def compare():
+    if "teacher_video" not in request.files or "student_video" not in request.files:
+        return jsonify({"error": "Both a teacher video and a student video are required."}), 400
+
+    teacher_file = request.files["teacher_video"]
+    student_file = request.files["student_video"]
+    if not teacher_file.filename or not student_file.filename:
+        return jsonify({"error": "Both a teacher video and a student video are required."}), 400
+
+    session_id = uuid.uuid4().hex[:12]
+    session_dir = os.path.join(UPLOAD_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+
+    teacher_path = os.path.join(session_dir, "teacher_" + teacher_file.filename)
+    student_path = os.path.join(session_dir, "student_" + student_file.filename)
+    teacher_file.save(teacher_path)
+    student_file.save(student_path)
+
+    try:
+        results = run_comparison(teacher_path, student_path, work_dir=session_dir)
+    except Exception as e:
+        return jsonify({"error": f"Comparison failed: {e}"}), 500
+
+    if results is None:
+        return jsonify({"error": "Couldn't compare these videos -- one or both didn't have "
+                                  "enough audio signal (claps/stomps/music) to align and compare."}), 422
+
+    results["session_id"] = session_id
     return jsonify(serialize_results(results))
 
 

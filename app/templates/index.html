@@ -62,31 +62,32 @@
           <div id="chakkar-content"></div>
         </div>
 
-        <div id="tab-comparison" class="tab-panel hidden">
-          <h2>Comparison</h2>
-          <p class="subtext">Upload a teacher's performance and your own take on the same piece to get an action-by-action comparison, e.g. "at 0:42, the teacher clapped twice, you only clapped once."</p>
-          <form id="comparison-form" class="comparison-form">
-            <div class="comparison-uploads">
-              <label class="upload-box" for="teacher-video-input">
-                <div class="upload-box-title">Teacher / reference video</div>
-                <input type="file" id="teacher-video-input" name="teacher_video" accept="video/*">
-                <div class="upload-box-filename" id="teacher-video-filename">No file selected</div>
-              </label>
-              <label class="upload-box" for="student-video-input">
-                <div class="upload-box-title">Your video</div>
-                <input type="file" id="student-video-input" name="student_video" accept="video/*">
-                <div class="upload-box-filename" id="student-video-filename">No file selected</div>
-              </label>
-            </div>
-            <button type="submit">Compare performances</button>
-          </form>
-          <div id="comparison-status" class="status"></div>
-        </div>
-
         <div id="tab-reports" class="tab-panel hidden">
           <h2>Reports</h2>
           <ul id="report-list" class="report-list"></ul>
         </div>
+      </section>
+
+      <section id="tab-comparison" class="tab-panel hidden">
+        <h2>Comparison</h2>
+        <p class="subtext">Upload a teacher's performance and your own take on the same piece to get an action-by-action comparison, e.g. "at 0:42, the teacher clapped twice, you only clapped once."</p>
+        <form id="comparison-form" class="comparison-form">
+          <div class="comparison-uploads">
+            <label class="upload-box" for="teacher-video-input">
+              <div class="upload-box-title">Teacher / reference video</div>
+              <input type="file" id="teacher-video-input" name="teacher_video" accept="video/*">
+              <div class="upload-box-filename" id="teacher-video-filename">No file selected</div>
+            </label>
+            <label class="upload-box" for="student-video-input">
+              <div class="upload-box-title">Your video</div>
+              <input type="file" id="student-video-input" name="student_video" accept="video/*">
+              <div class="upload-box-filename" id="student-video-filename">No file selected</div>
+            </label>
+          </div>
+          <button type="submit">Compare performances</button>
+        </form>
+        <div id="comparison-status" class="status"></div>
+        <div id="comparison-results" class="hidden"></div>
       </section>
     </main>
   </div>

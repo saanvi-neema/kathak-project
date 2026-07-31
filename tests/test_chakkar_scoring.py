@@ -7,14 +7,15 @@ can't silently break it without anything catching it.
 
 import os
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from chakkar_scoring import score_chakkar
+from chakkar_scoring import score_chakkar, score_chakkar_events, segment_rotation_bursts
 
-DATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "landmarks", "chakkar_pilot",
-)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data", "landmarks", "chakkar_pilot")
+MOVEMENT_01_LANDMARKS_CSV = os.path.join(PROJECT_ROOT, "data", "landmarks", "movement_01.csv")
 
 # (clip name, true spin count, count tolerance)
 GROUND_TRUTH = [
@@ -57,3 +58,99 @@ def test_all_ground_truth_clips_have_controlled_stop(clip_name, _):
     angles_csv = os.path.join(DATA_DIR, clip_name, f"{clip_name}_angles.csv")
     result = score_chakkar(angles_csv)
     assert bool(result["controlled_stop"]), f"{clip_name}: expected a controlled stop"
+
+
+# --- Multi-event segmentation ---------------------------------------------
+#
+# The rest of this file covers segment_rotation_bursts / score_chakkar_events
+# -- the fix for a real bug found during development: scoring a whole clip
+# as one blended event hid multiple separate chakkar phrases in a real test
+# clip (movement_01.mov, a Birju Maharaj piece excerpt) behind a single
+# falsely-clean result. These tests pin that fix in place: the 3 ground
+# truth clips (each one continuous spin) must still segment as exactly one
+# event, and movement_01.mov must be recognized as containing several
+# distinct rotation bursts, not one.
+
+@pytest.mark.parametrize("clip_name,true_count", GROUND_TRUTH)
+def test_ground_truth_clips_segment_as_a_single_event(clip_name, true_count):
+    """A clip that's one continuous spin shouldn't get artificially split
+    into multiple segments -- segmentation must agree with score_chakkar()
+    on these already-validated clips, not just produce a different answer."""
+    angles_csv = os.path.join(DATA_DIR, clip_name, f"{clip_name}_angles.csv")
+    events = score_chakkar_events(angles_csv)
+    assert len(events) == 1, f"{clip_name}: expected exactly 1 segment, got {len(events)}"
+    assert events[0]["rounded_count"] == true_count
+    assert abs(events[0]["raw_count"] - true_count) < 0.1
+
+
+def _shoulder_angles_from_landmarks(landmarks_csv):
+    """
+    Minimal standalone version of app/pipeline.py's build_shoulder_angles --
+    duplicated here (not imported) so this test file stays independent of
+    the app layer's heavier dependencies (cv2, imageio_ffmpeg).
+    """
+    df = pd.read_csv(landmarks_csv)
+    l_x, l_y = df["body_left_shoulder_x"], df["body_left_shoulder_y"]
+    r_x, r_y = df["body_right_shoulder_x"], df["body_right_shoulder_y"]
+    both_visible = l_x.notna() & r_x.notna()
+    angle = np.where(both_visible, np.degrees(np.arctan2(r_y - l_y, r_x - l_x)), np.nan)
+    return pd.DataFrame({"frame": df["frame"], "timestamp_ms": df["timestamp_ms"], "shoulder_angle_deg": angle})
+
+
+@pytest.mark.skipif(not os.path.exists(MOVEMENT_01_LANDMARKS_CSV), reason="movement_01.mov landmarks not extracted locally")
+def test_mixed_clip_finds_multiple_rotation_bursts(tmp_path):
+    """
+    The actual regression case: movement_01.mov previously scored as one
+    "clean" chakkar (raw_count=2.01, no flags) despite containing several
+    separate rotation bursts. Segmentation must find more than one distinct
+    candidate burst here -- the whole point of this fix.
+    """
+    angles_df = _shoulder_angles_from_landmarks(MOVEMENT_01_LANDMARKS_CSV)
+    known = angles_df.dropna(subset=["shoulder_angle_deg"])
+    t = known["timestamp_ms"].to_numpy(dtype=float) / 1000.0
+    unwrapped = np.degrees(np.unwrap(np.radians(known["shoulder_angle_deg"].to_numpy())))
+
+    segments = segment_rotation_bursts(t, unwrapped)
+    assert len(segments) > 1, "expected multiple distinct rotation bursts in a mixed real clip"
+
+    angles_csv = tmp_path / "movement_01_angles.csv"
+    angles_df.to_csv(angles_csv, index=False)
+    events = score_chakkar_events(str(angles_csv))
+    # At least one segment should clear the full chakkar bar; each scored
+    # event must carry its own start/end, not the whole clip's.
+    assert len(events) >= 1
+    for event in events:
+        assert event["end_sec"] - event["start_sec"] < 10, "a scored event should be a short burst, not most of the clip"
+
+
+def test_single_frame_glitch_is_not_treated_as_a_rotation_burst():
+    """
+    A one-frame tracking glitch (e.g. a momentary left/right shoulder swap)
+    can look like a huge instantaneous angle jump. Confirmed on real data
+    that this shows up as exactly one 0.1s window spiking over threshold
+    with normal values immediately before and after -- segmentation must not
+    treat that as a real sustained rotation.
+    """
+    dt = 1 / 30
+    n = 90  # 3 seconds at 30fps
+    times = np.arange(n) * dt
+    angles = np.zeros(n)  # perfectly still...
+    glitch_idx = 45
+    angles[glitch_idx] = 170.0  # ...except one single-frame spike
+
+    segments = segment_rotation_bursts(times, angles)
+    assert segments == []
+
+
+def test_sustained_rotation_is_detected_as_a_burst():
+    """Sanity check in the other direction: a real sustained fast rotation must be found."""
+    dt = 1 / 30
+    n = 90
+    times = np.arange(n) * dt
+    # constant 400 deg/s for the whole 3 seconds -- well past both the speed
+    # and minimum-duration thresholds.
+    angles = 400.0 * times
+
+    segments = segment_rotation_bursts(times, angles)
+    assert len(segments) == 1
+    assert segments[0]["end"] - segments[0]["start"] > 1.0

@@ -187,8 +187,8 @@ def process_video(video_path: str, out_dir: str) -> dict:
         angles_deg = np.array([a for _, a in known])
         unwrapped = np.degrees(np.unwrap(np.radians(angles_deg)))
         unwrapped_deg = list(zip(frames_known, unwrapped))
-        total_rotation_deg = unwrapped[-1] - unwrapped[0]
-        est_chakkars = abs(total_rotation_deg) / 360.0
+        total_rotation_deg = np.sum(np.abs(np.diff(unwrapped)))
+        est_chakkars = total_rotation_deg / 360.0
 
     # Plot raw (wrapped) angle and unwrapped angle vs frame.
     fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
@@ -233,7 +233,7 @@ def main():
         print(f"Processing {filename}...")
         r = process_video(video_path, out_dir)
         r["true_count"] = true_count
-        r["rounded_est"] = round(r["est_chakkars"])
+        r["rounded_est"] = round(r["est_chakkars"] * 2) / 2
         r["error"] = r["rounded_est"] - true_count
         results.append(r)
 
