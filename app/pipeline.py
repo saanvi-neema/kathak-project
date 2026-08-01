@@ -193,6 +193,21 @@ def build_shoulder_angles(landmarks_csv):
     out["shoulder_angle_deg"] = np.where(
         both_visible, np.degrees(np.arctan2(r_y - l_y, r_x - l_x)), np.nan
     )
+
+    # Drift-during-spin (chakkar_scoring.compute_drift) needs a position
+    # reference and a body-scale unit to normalize it against -- raw pixel
+    # distance means nothing without knowing camera distance, but shoulder
+    # width stays roughly constant regardless of that.
+    out["shoulder_width"] = np.where(both_visible, np.hypot(r_x - l_x, r_y - l_y), np.nan)
+    if "body_left_hip_x" in df.columns and "body_right_hip_x" in df.columns:
+        l_hip_x, l_hip_y = df["body_left_hip_x"], df["body_left_hip_y"]
+        r_hip_x, r_hip_y = df["body_right_hip_x"], df["body_right_hip_y"]
+        com_ready = both_visible & l_hip_x.notna() & r_hip_x.notna()
+        out["center_of_mass_x"] = np.where(com_ready, (l_x + r_x + l_hip_x + r_hip_x) / 4, np.nan)
+        out["center_of_mass_y"] = np.where(com_ready, (l_y + r_y + l_hip_y + r_hip_y) / 4, np.nan)
+    else:
+        out["center_of_mass_x"] = np.nan
+        out["center_of_mass_y"] = np.nan
     return out
 
 

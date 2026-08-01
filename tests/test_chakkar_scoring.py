@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from chakkar_scoring import score_chakkar, score_chakkar_events, segment_rotation_bursts
+from chakkar_scoring import score_chakkar, score_chakkar_events, segment_rotation_bursts, compute_drift
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "landmarks", "chakkar_pilot")
@@ -154,3 +154,73 @@ def test_sustained_rotation_is_detected_as_a_burst():
     segments = segment_rotation_bursts(times, angles)
     assert len(segments) == 1
     assert segments[0]["end"] - segments[0]["start"] > 1.0
+
+
+# --- Drift-during-spin ------------------------------------------------------
+#
+# compute_drift() is deliberately NOT a pass/fail check (a traveling chakkar
+# can be intentional) -- these tests just pin the two numbers it reports:
+# net displacement normalized by shoulder width, and path straightness
+# (net distance / total distance covered).
+
+def _make_drift_df(times, com_x, com_y, shoulder_width=0.1):
+    return pd.DataFrame({
+        "timestamp_ms": times * 1000.0,
+        "center_of_mass_x": com_x,
+        "center_of_mass_y": com_y,
+        "shoulder_width": shoulder_width,
+    })
+
+
+def test_straight_line_travel_has_high_straightness():
+    """A dancer moving steadily in one direction (a deliberate traveling
+    chakkar) should measure close to straightness=1.0 -- net and total
+    distance covered are nearly the same."""
+    times = np.linspace(0, 2, 40)
+    com_x = np.linspace(0.3, 0.6, 40)  # steady rightward move
+    com_y = np.full(40, 0.5)
+    df = _make_drift_df(times, com_x, com_y, shoulder_width=0.1)
+
+    drift = compute_drift(df, start_sec=0.0, end_sec=2.0, pad_sec=0.0)
+    assert drift is not None
+    assert drift["path_straightness"] > 0.95
+    # net displacement 0.3 in normalized coords / 0.1 shoulder width = 3.0 shoulder widths
+    assert drift["drift_shoulder_widths"] == pytest.approx(3.0, rel=0.05)
+
+
+def test_wobbly_back_and_forth_has_low_straightness_even_with_small_net_drift():
+    """Lots of back-and-forth movement that mostly cancels out should read
+    as a low straightness ratio, even though net displacement is small --
+    this is the "wandered a lot but didn't really go anywhere" case."""
+    times = np.linspace(0, 2, 40)
+    # oscillates back and forth with a tiny net drift
+    com_x = 0.5 + 0.05 * np.sin(np.linspace(0, 6 * np.pi, 40)) + np.linspace(0, 0.01, 40)
+    com_y = np.full(40, 0.5)
+    df = _make_drift_df(times, com_x, com_y, shoulder_width=0.1)
+
+    drift = compute_drift(df, start_sec=0.0, end_sec=2.0, pad_sec=0.0)
+    assert drift is not None
+    assert drift["path_straightness"] < 0.3
+    assert drift["drift_shoulder_widths"] < 0.5  # net drift is small despite all the wobbling
+
+
+def test_no_movement_has_straightness_one_and_zero_drift():
+    times = np.linspace(0, 2, 10)
+    com_x = np.full(10, 0.5)
+    com_y = np.full(10, 0.5)
+    df = _make_drift_df(times, com_x, com_y, shoulder_width=0.1)
+
+    drift = compute_drift(df, start_sec=0.0, end_sec=2.0, pad_sec=0.0)
+    assert drift is not None
+    assert drift["drift_shoulder_widths"] == pytest.approx(0.0)
+    assert drift["path_straightness"] == 1.0
+
+
+def test_missing_center_of_mass_columns_returns_none():
+    df = pd.DataFrame({"timestamp_ms": [0, 1000, 2000]})
+    assert compute_drift(df, 0.0, 2.0) is None
+
+
+def test_too_few_frames_returns_none():
+    df = _make_drift_df(np.array([0.0]), np.array([0.5]), np.array([0.5]))
+    assert compute_drift(df, 0.0, 0.0) is None

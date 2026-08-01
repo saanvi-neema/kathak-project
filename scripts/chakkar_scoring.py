@@ -173,6 +173,58 @@ def segment_rotation_bursts(times, unwrapped, threshold_deg_per_sec=SPIN_THRESHO
     return [{"start": s, "end": e} for s, e in merged if (e - s) >= min_duration_sec]
 
 
+MIN_DRIFT_FRAMES = 2
+
+
+def compute_drift(df, start_sec, end_sec, pad_sec=SEGMENT_SCORE_PAD_SEC):
+    """
+    Measures how far the dancer's center of mass moved during a chakkar
+    segment, normalized by shoulder width (a body-scale unit -- raw pixel
+    distance means nothing without knowing camera distance, and there's no
+    camera calibration here to convert to real-world units like feet).
+
+    Deliberately NOT judged as good or bad here: a traveling chakkar
+    (moving across the floor while spinning) is a real, intentional
+    choreographic element in Kathak, not necessarily a mistake, and there's
+    no way to tell intent from video alone. What IS measurable without
+    guessing intent is whether the path looked fairly direct vs. erratic --
+    genuine instability tends to wander, so the total distance covered ends
+    up much more than the net distance actually gained; a deliberate
+    directional move stays close to a straight line. Reported as plain
+    numbers for the dashboard to describe, not scored or flagged -- no
+    validated threshold exists yet for what's "too much" drift.
+
+    Returns None if center-of-mass data isn't available (e.g. hips weren't
+    visible) or there aren't enough frames in the segment to say anything.
+    """
+    required = ["center_of_mass_x", "center_of_mass_y", "shoulder_width", "timestamp_ms"]
+    if not all(c in df.columns for c in required):
+        return None
+
+    known = df.dropna(subset=required)
+    t = known["timestamp_ms"].to_numpy(dtype=float) / 1000.0
+    mask = (t >= start_sec - pad_sec) & (t <= end_sec + pad_sec)
+    seg = known[mask]
+    if len(seg) < MIN_DRIFT_FRAMES:
+        return None
+
+    shoulder_width = seg["shoulder_width"].to_numpy(dtype=float)
+    mean_shoulder_width = np.nanmean(shoulder_width)
+    if not mean_shoulder_width or np.isnan(mean_shoulder_width):
+        return None
+
+    com = seg[["center_of_mass_x", "center_of_mass_y"]].to_numpy(dtype=float)
+    net_displacement = np.linalg.norm(com[-1] - com[0])
+    step_displacements = np.linalg.norm(np.diff(com, axis=0), axis=1)
+    path_length = np.sum(step_displacements)
+    straightness = min(1.0, float(net_displacement / path_length)) if path_length > 0 else 1.0
+
+    return {
+        "drift_shoulder_widths": float(net_displacement / mean_shoulder_width),
+        "path_straightness": straightness,
+    }
+
+
 def score_chakkar_segment(df, start_sec, end_sec, pad_sec=SEGMENT_SCORE_PAD_SEC):
     """
     Scores one rotation segment using the same measures as score_chakkar()
@@ -221,6 +273,8 @@ def score_chakkar_segment(df, start_sec, end_sec, pad_sec=SEGMENT_SCORE_PAD_SEC)
     stop_ratio = final_speed / peak_speed if peak_speed > 0 else 0.0
     controlled_stop = stop_ratio < CONTROLLED_STOP_RATIO
 
+    drift = compute_drift(df, start_sec, end_sec, pad_sec)
+
     return {
         "start_sec": float(t[0]),
         "end_sec": float(t[-1]),
@@ -230,6 +284,8 @@ def score_chakkar_segment(df, start_sec, end_sec, pad_sec=SEGMENT_SCORE_PAD_SEC)
         "orientation_gap_deg": orientation_gap,
         "stop_ratio": stop_ratio,
         "controlled_stop": controlled_stop,
+        "drift_shoulder_widths": drift["drift_shoulder_widths"] if drift else None,
+        "path_straightness": drift["path_straightness"] if drift else None,
     }
 
 

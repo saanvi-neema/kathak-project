@@ -194,6 +194,14 @@ function renderChakkar(chakkar) {
 
 function renderChakkarEvent(event, index) {
   const r = event.result;
+  const hasDrift = r.drift_shoulder_widths !== null && r.drift_shoulder_widths !== undefined;
+  const driftHtml = hasDrift ? `
+    <p class="subtext">
+      Moved about ${(r.drift_shoulder_widths * 100).toFixed(0)}% of a shoulder-width from where this chakkar started
+      (path straightness: ${r.path_straightness.toFixed(2)}, 1.0 = a straight line, lower = more back-and-forth).
+      Shown for reference only -- this isn't scored. Traveling while spinning can be a deliberate choreography choice,
+      not a mistake, and there's no way to tell intent from video alone.
+    </p>` : "";
   return `
     <h3>Chakkar ${index + 1} <span class="subtext">(${formatTime(r.start_sec)}&ndash;${formatTime(r.end_sec)})</span></h3>
     <div class="score-grid">
@@ -203,6 +211,7 @@ function renderChakkarEvent(event, index) {
       <div class="score-card"><div class="label">Ending orientation gap</div><div class="value">${r.orientation_gap_deg.toFixed(0)}&deg;</div></div>
       <div class="score-card"><div class="label">Stop quality</div><div class="value">${r.controlled_stop ? "Controlled" : "Abrupt"}</div></div>
     </div>
+    ${driftHtml}
   `;
 }
 
