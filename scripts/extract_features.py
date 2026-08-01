@@ -192,22 +192,37 @@ def compute_hand_features(df, feat):
 
             feat[f"hand_{side}_{finger}_tip_to_wrist"] = np.linalg.norm(tip_xy - wrist, axis=-1)
 
+        # Hand-scale reference (wrist to middle-MCP -- "palm length") so
+        # distance-based features below are comparable across videos shot at
+        # different distances from the camera. Real bug found and fixed: a
+        # video where the hand appears smaller/larger in frame than the
+        # reference photos used absolute normalized-coordinate distances,
+        # so a fixed touch/spread threshold silently stopped meaning the
+        # same thing -- confirmed directly when a frame that MUST be pataka
+        # (guaranteed by recording order) failed pataka's own thumb-touch
+        # check under the old un-normalized distances.
+        middle_mcp_xy = hand_xy(df, side, HAND_FINGERS["middle"][0])
+        hand_scale = np.linalg.norm(middle_mcp_xy - wrist, axis=-1)
+        hand_scale = np.where(hand_scale > 1e-6, hand_scale, np.nan)  # guard div-by-zero on a degenerate frame
+
         # Thumb-to-other-fingertip distances -- the signal most mudra
         # definitions actually hinge on (e.g. Pataka: thumb touches index base;
-        # Kartarimukh: thumb+ring touch while index+pinky spread).
+        # Kartarimukh: thumb+ring touch while index+pinky spread). Normalized
+        # by hand_scale so a fixed threshold means "close relative to this
+        # hand's own size", not a fixed number of pixels/frame-fraction.
         thumb_tip = hand_xy(df, side, HAND_FINGERS["thumb"][3])
         for finger in ["index", "middle", "ring", "pinky"]:
             tip = hand_xy(df, side, HAND_FINGERS[finger][3])
-            feat[f"hand_{side}_thumb_to_{finger}_tip"] = np.linalg.norm(thumb_tip - tip, axis=-1)
+            feat[f"hand_{side}_thumb_to_{finger}_tip"] = np.linalg.norm(thumb_tip - tip, axis=-1) / hand_scale
 
         # Adjacent-fingertip spread (index-middle, middle-ring, ring-pinky) --
         # distinguishes "fingers together" (Pataka) from "fingers spread"
-        # (Kartarimukh, Alapadma).
+        # (Kartarimukh, Alapadma). Also hand-scale normalized.
         adjacent = [("index", "middle"), ("middle", "ring"), ("ring", "pinky")]
         for f1, f2 in adjacent:
             tip1 = hand_xy(df, side, HAND_FINGERS[f1][3])
             tip2 = hand_xy(df, side, HAND_FINGERS[f2][3])
-            feat[f"hand_{side}_{f1}_{f2}_spread"] = np.linalg.norm(tip1 - tip2, axis=-1)
+            feat[f"hand_{side}_{f1}_{f2}_spread"] = np.linalg.norm(tip1 - tip2, axis=-1) / hand_scale
 
         # Hand orientation: angle of wrist -> middle-MCP vector from vertical,
         # a simple 2D proxy for how the hand is rotated in frame.

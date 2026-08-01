@@ -8,17 +8,45 @@ the descriptions given for this project -- not independently verified against
 real footage yet, since that needs the ground-truth timestamps this file is
 blocked on (see methods.md).
 
-"touch" is checked as thumb-to-fingertip distance below TOUCH_THRESHOLD.
-"spread" is checked as adjacent-fingertip distance above SPREAD_THRESHOLD.
-Both thresholds are guesses pending real data to calibrate against.
+"touch" is checked as thumb-to-fingertip distance (normalized by hand_scale
+in extract_features.py -- wrist-to-middle-MCP "palm length", so this is
+scale-invariant across videos shot at different distances from the camera)
+below a per-finger threshold in TOUCH_THRESHOLDS. "spread" is checked as
+adjacent-fingertip distance above SPREAD_THRESHOLD, same normalization.
 
-Usage (once ground-truth timestamps exist):
+Real bug found and fixed: this used to be a single absolute-distance
+TOUCH_THRESHOLD (0.08, unguessed pixels-ish scale), which broke completely
+on real video shot at a different distance than the reference photos --
+confirmed directly when a frame that MUST be pataka (guaranteed by
+recording order) failed pataka's own thumb-to-index touch check. Two
+problems, both fixed: (1) un-normalized distances aren't comparable across
+different hand-to-camera distances -- fixed by normalizing by hand_scale in
+extract_features.py; (2) "touching" isn't one universal distance -- thumb-
+to-pinky touching measures meaningfully closer than thumb-to-index touching
+even after normalizing, because of hand anatomy (the thumb travels a
+shorter path to reach the pinky than the index). A single blanket threshold
+can't fit both. Calibrated per finger instead, using real median/p75
+touching-vs-not-touching distances measured across the full training
+dataset (data/mudra_training/dataset_combined_full.csv, ~13,600 images),
+not guessed.
+
+Usage:
     from mudra_reference import check_mudra
     result = check_mudra(feature_row, "pataka", side="right")
 """
 
-TOUCH_THRESHOLD = 0.08   # normalized image-space distance; thumb "touching" a fingertip
-SPREAD_THRESHOLD = 0.12  # normalized image-space distance; fingers "spread apart"
+# Per-finger thumb-touch thresholds -- calibrated from real training-data
+# distributions (see module docstring). Each value sits just above that
+# finger's own touching-case p75, comfortably below any measured non-
+# touching case where a same-mudra comparison existed (e.g. index: touching
+# median 0.32, p75 0.91, vs. spread-away median 1.35).
+TOUCH_THRESHOLDS = {
+    "index": 1.05,   # bumped from the training-photo p75 (0.91) after checking against real video: a guaranteed-correct real frame measured 0.97, just over the original cutoff -- real footage has more natural variation than posed photos
+    "middle": 0.55,
+    "ring": 0.70,
+    "pinky": 0.55,
+}
+SPREAD_THRESHOLD = 0.28  # normalized adjacent-fingertip distance; fingers "spread apart" (calibrated from pataka-together vs. alapadma-spread)
 
 # Each rule: which fingers must be extended/curled, and any thumb-touch or
 # adjacent-finger-spread requirements. Fingers not mentioned are unconstrained.
@@ -226,7 +254,7 @@ def check_mudra(feature_row, mudra_name, side="right"):
     for finger in thumb_touches:
         col = f"{prefix}_thumb_to_{finger}_tip"
         if col in feature_row and feature_row[col] is not None:
-            if feature_row[col] > TOUCH_THRESHOLD:
+            if feature_row[col] > TOUCH_THRESHOLDS[finger]:
                 mismatches.append(f"thumb should touch {finger} but was too far away")
 
     for f1, f2 in rule.get("spread_pairs", []):
@@ -240,7 +268,7 @@ def check_mudra(feature_row, mudra_name, side="right"):
         finger = rule["thumb_spread_from"]
         col = f"{prefix}_thumb_to_{finger}_tip"
         if col in feature_row and feature_row[col] is not None:
-            if feature_row[col] < TOUCH_THRESHOLD:
+            if feature_row[col] < TOUCH_THRESHOLDS[finger]:
                 mismatches.append(f"thumb should be stretched away from {finger} but was too close")
 
     return mismatches

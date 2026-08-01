@@ -8,7 +8,15 @@ Mrigasheesh and Singhamukh (both had inverted extended/curled states).
 
 import pytest
 
-from mudra_reference import MUDRA_RULES, check_mudra, check_mudra_variants
+from mudra_reference import MUDRA_RULES, TOUCH_THRESHOLDS, SPREAD_THRESHOLD, check_mudra, check_mudra_variants
+
+# Values comfortably on either side of every per-finger threshold in
+# TOUCH_THRESHOLDS/SPREAD_THRESHOLD (which are hand-scale-normalized, not
+# small pixel-ish numbers -- see mudra_reference.py's module docstring for
+# why), so these synthetic rows stay valid regardless of the exact
+# calibrated threshold values.
+CLEARLY_TOUCHING = 0.05
+CLEARLY_APART = 2.0
 
 
 def make_feature_row(rule, side="right", touch_ok=True, spread_ok=True):
@@ -24,14 +32,14 @@ def make_feature_row(rule, side="right", touch_ok=True, spread_ok=True):
     if isinstance(thumb_touches, str):
         thumb_touches = [thumb_touches]
     for finger in thumb_touches:
-        row[f"{prefix}_thumb_to_{finger}_tip"] = 0.01 if touch_ok else 0.5
+        row[f"{prefix}_thumb_to_{finger}_tip"] = CLEARLY_TOUCHING if touch_ok else CLEARLY_APART
 
     for f1, f2 in rule.get("spread_pairs", []):
-        row[f"{prefix}_{f1}_{f2}_spread"] = 0.5 if spread_ok else 0.01
+        row[f"{prefix}_{f1}_{f2}_spread"] = CLEARLY_APART if spread_ok else CLEARLY_TOUCHING
 
     if "thumb_spread_from" in rule:
         finger = rule["thumb_spread_from"]
-        row[f"{prefix}_thumb_to_{finger}_tip"] = 0.5 if spread_ok else 0.01
+        row[f"{prefix}_thumb_to_{finger}_tip"] = CLEARLY_APART if spread_ok else CLEARLY_TOUCHING
 
     return row
 
