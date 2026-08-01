@@ -138,8 +138,21 @@ function renderOverview(data) {
       </div>`;
   }
 
-  if (!data.chakkar && !data.timing) {
-    container.innerHTML += `<div class="empty-state">No chakkar or timing signal detected in this clip.</div>`;
+  if (data.mudra && data.mudra.accuracy_score !== null && data.mudra.accuracy_score !== undefined) {
+    const mudraAccuracy = data.mudra.accuracy_score;
+    container.innerHTML += `
+      <div class="score-card">
+        <div class="label">Mudra Accuracy</div>
+        <div class="value ${scoreClass(mudraAccuracy)}">${fmtScore(mudraAccuracy)}%</div>
+      </div>
+      <div class="score-card">
+        <div class="label">Mudra Holds Identified</div>
+        <div class="value">${data.mudra.events.length}</div>
+      </div>`;
+  }
+
+  if (!data.chakkar && !data.timing && !data.mudra) {
+    container.innerHTML += `<div class="empty-state">No chakkar, timing, or mudra signal detected in this clip.</div>`;
   }
 }
 
@@ -234,7 +247,45 @@ function renderTiming(timing) {
 
 function renderMudra(mudra) {
   const note = document.getElementById("mudra-note");
-  note.textContent = "Mudra analysis isn't run automatically on arbitrary uploads yet -- the checker can verify a NAMED mudra's shape, but there's no classifier to identify which mudra is happening at a given moment without ground-truth timestamps. This tab will populate once that piece exists.";
+  const content = document.getElementById("mudra-content");
+
+  if (!mudra || !mudra.events || mudra.events.length === 0) {
+    note.textContent = "No confidently-identified mudra holds found in this clip -- either no trained classifier exists yet, or no hand pose in this video was held steadily enough / matched a known mudra confidently enough to report. See methods.md for how this identification works and its known limits (trained on a Bharatanatyam photo dataset, not Kathak footage).";
+    content.innerHTML = "";
+    return;
+  }
+
+  note.textContent = "Identification is trained on a Bharatanatyam photo dataset (not Kathak footage) -- treat predictions as a first pass, not ground truth. See methods.md for known limits.";
+
+  const rateHtml = mudra.accuracy_score === null || mudra.accuracy_score === undefined
+    ? ""
+    : `<div class="score-grid" style="margin-bottom: 16px;">
+         <div class="score-card">
+           <div class="label">Mudra Accuracy</div>
+           <div class="value ${scoreClass(mudra.accuracy_score)}">${fmtScore(mudra.accuracy_score)}%</div>
+         </div>
+       </div>`;
+
+  const eventsHtml = mudra.events.map(e => {
+    const cls = e.mismatches && e.mismatches.length ? "flag-item" : "";
+    const mismatchText = e.mismatches === null || e.mismatches === undefined
+      ? "(no reference rule to check against)"
+      : e.mismatches.length
+        ? e.mismatches.join("; ")
+        : "matches the reference shape";
+    return `<div class="${cls}">
+      ${formatTime(e.start_sec)}&ndash;${formatTime(e.end_sec)} (${e.hand_side} hand): <strong>${e.mudra}</strong>
+      (confidence ${(e.confidence * 100).toFixed(0)}%) &mdash; ${mismatchText}
+    </div>`;
+  }).join("");
+
+  content.innerHTML = `
+    ${rateHtml}
+    <h3>Flags</h3>
+    ${renderFlagList(mudra.flags)}
+    <h3>All identified holds</h3>
+    ${eventsHtml}
+  `;
 }
 
 function bindComparisonFileLabel(inputId, labelId) {

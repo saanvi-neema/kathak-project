@@ -9,4 +9,5 @@ imageio-ffmpeg
 fastdtw
 scipy
 scikit-learn
+joblib
 pytest

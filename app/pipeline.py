@@ -3,11 +3,12 @@ Dashboard backend glue: runs the analysis pipeline on an uploaded video and
 returns structured results for the frontend.
 
 Chakkar analysis and timing/beat-sync analysis run fully automatically on
-any video that has body pose and/or audio. Mudra analysis is NOT run
-automatically here -- mudra_reference.py can only check a NAMED mudra
-against its rule, it can't identify which mudra is happening at a given
-moment (no classifier exists, no training data for one yet). The Mudra tab
-reports this honestly rather than faking a result.
+any video that has body pose and/or audio. Mudra identification runs
+automatically too IF a trained classifier exists at MUDRA_MODEL_PATH (see
+mudra_classifier.py/build_mudra_training_data.py) -- otherwise it honestly
+reports None rather than faking a result, since mudra_reference.py alone can
+only check a NAMED mudra against its rule, not identify which mudra is
+happening at a given moment.
 """
 
 import os
@@ -24,11 +25,11 @@ SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 from extract_landmarks import extract_landmarks  # noqa: E402
-from extract_features import extract_features  # noqa: E402
+from extract_features import extract_features, compute_hand_features  # noqa: E402
 from chakkar_scoring import score_chakkar_events  # noqa: E402
 from beat_sync_check import windowed_sync_check  # noqa: E402
-from report_assembly import flags_from_chakkar, flags_from_beat_sync, assemble_report  # noqa: E402
-from score_aggregation import chakkar_quality_score, timing_accuracy_score, overall_score  # noqa: E402
+from report_assembly import flags_from_chakkar, flags_from_beat_sync, flags_from_mudra_checks, assemble_report  # noqa: E402
+from score_aggregation import chakkar_quality_score, timing_accuracy_score, mudra_accuracy_score, count_checked_constraints, overall_score  # noqa: E402
 from comparison import compare_performances  # noqa: E402
 
 # Same BlazePose connection subset used in the pilot scripts' overlay drawing.
@@ -364,6 +365,85 @@ def run_comparison(teacher_video_path, student_video_path, work_dir):
     }
 
 
+MUDRA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mudra_training", "model.joblib")
+MUDRA_MIN_CONFIDENCE = 0.5  # a prediction below this isn't reported -- a reasoned starting point, not calibrated against real data yet
+
+
+def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
+    """
+    Identifies which mudra (if any) is being held during each stable hand
+    pose in the video (mudra_classifier.py), then checks that identified
+    mudra's hand shape against its geometric reference rule
+    (mudra_reference.py) -- combining "what mudra is this" with "is it
+    formed correctly", which was the actual target behavior described early
+    in this project, not just identification alone.
+
+    Returns None if no trained model exists yet at model_path -- the honest
+    default until real mudra training footage is recorded and
+    mudra_classifier.py is run (see methods.md); the dashboard already
+    reports that plainly instead of faking a result.
+    """
+    if not os.path.exists(model_path):
+        return None
+
+    import joblib
+    from build_mudra_training_data import hand_motion_magnitude, find_held_windows
+    from mudra_classifier import predict_mudra
+    from mudra_reference import check_mudra_variants, MUDRA_RULES
+
+    bundle = joblib.load(model_path)
+
+    df = pd.read_csv(landmarks_csv)
+    t = df["timestamp_ms"].to_numpy(dtype=float) / 1000.0
+
+    events = []
+    for side in ["left", "right"]:
+        motion = hand_motion_magnitude(df, side)
+        if motion is None:
+            continue
+        for start, end in find_held_windows(t, motion):
+            mask = (t >= start) & (t <= end)
+            segment_df = df[mask]
+            if segment_df.empty:
+                continue
+
+            feat = pd.DataFrame(index=segment_df.index)
+            compute_hand_features(segment_df, feat)
+            side_cols = [c for c in feat.columns if c.startswith(f"hand_{side}_")]
+            if not side_cols:
+                continue
+
+            mean_row = feat[side_cols].mean().to_dict()
+            for col in list(mean_row):
+                if col.endswith("_extended"):
+                    # mean() over a held window's True/False values gives a
+                    # fraction, not a bool -- check_mudra()'s bool() cast
+                    # would treat ANY nonzero fraction as "extended", so this
+                    # needs an explicit majority-vote threshold first.
+                    mean_row[col] = mean_row[col] > 0.5
+
+            stripped = {c[len(f"hand_{side}_"):]: v for c, v in mean_row.items()}
+            label, confidence = predict_mudra(bundle, stripped)
+            if label is None or confidence < MUDRA_MIN_CONFIDENCE:
+                continue
+
+            mismatches, constraints_checked = None, 0
+            try:
+                variant_name, mismatches = check_mudra_variants(mean_row, label, side=side)
+                constraints_checked = count_checked_constraints(MUDRA_RULES[variant_name])
+            except ValueError:
+                pass  # classifier predicted a label with no matching reference rule -- report identification only
+
+            events.append({
+                "start_sec": float(start), "end_sec": float(end),
+                "hand_side": side, "mudra": label, "confidence": float(confidence),
+                "mismatches": mismatches, "constraints_checked": constraints_checked,
+            })
+
+    events.sort(key=lambda e: e["start_sec"])
+    return events if events else None
+
+
 def analyze_video(video_path, work_dir):
     """Run the full available pipeline on one uploaded video. Returns a results dict for the frontend."""
     os.makedirs(work_dir, exist_ok=True)
@@ -374,29 +454,42 @@ def analyze_video(video_path, work_dir):
 
     chakkar = run_chakkar_analysis(landmarks_csv)
     timing = run_timing_analysis(video_path, features_csv, duration_sec)
+    mudra_events = run_mudra_analysis(landmarks_csv)
 
     overlay_filename = "pose_overlay.mp4"
     overlay_path = os.path.join(work_dir, overlay_filename)
     overlay_ok = generate_pose_overlay(video_path, landmarks_csv, overlay_path)
+
+    mudra_flags = []
+    mudra_check_results = []
+    if mudra_events:
+        for e in mudra_events:
+            if e["mismatches"] is not None:
+                mudra_flags.extend(flags_from_mudra_checks([(e["end_sec"], e["mudra"], e["mismatches"])]))
+                mudra_check_results.append((e["mismatches"], e["constraints_checked"]))
+    mudra_score = mudra_accuracy_score(mudra_check_results) if mudra_check_results else None
 
     all_flags = []
     if chakkar:
         all_flags.extend(chakkar["flags"])
     if timing:
         all_flags.extend(timing["flags"])
+    all_flags.extend(mudra_flags)
     report_lines = assemble_report(all_flags)
 
     overall = overall_score(
-        mudra_score=None,  # not run automatically -- see module docstring
+        mudra_score=mudra_score,
         chakkar_score=chakkar["quality_score"] if chakkar else None,
         timing_score=timing["accuracy_score"] if timing else None,
     )
+
+    mudra = {"events": mudra_events, "accuracy_score": mudra_score, "flags": mudra_flags} if mudra_events else None
 
     return {
         "duration_sec": duration_sec,
         "chakkar": chakkar,
         "timing": timing,
-        "mudra": None,  # honestly not run -- no automatic mudra identification exists yet
+        "mudra": mudra,  # None until a trained classifier exists at MUDRA_MODEL_PATH -- see run_mudra_analysis
         "overall_score": overall,
         "report_lines": report_lines,
         "overlay_video_filename": overlay_filename if overlay_ok else None,

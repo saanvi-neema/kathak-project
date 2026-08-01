@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 app/uploads/
 .pytest_cache/
+data/mudra_training/
