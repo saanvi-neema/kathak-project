@@ -366,7 +366,19 @@ def run_comparison(teacher_video_path, student_video_path, work_dir):
 
 
 MUDRA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mudra_training", "model.joblib")
-MUDRA_MIN_CONFIDENCE = 0.5  # a prediction below this isn't reported -- a reasoned starting point, not calibrated against real data yet
+# A prediction below this isn't reported. Calibrated against the 23 real,
+# individually-verified hold-windows from mudra_01.mov (see methods.md) --
+# correct predictions averaged confidence 0.44, wrong ones averaged 0.29,
+# a real but not clean separation (correct as low as 0.23, wrong as high as
+# 0.49). The old default of 0.5 was far too conservative: it only let
+# through 23% of the correct predictions just to avoid nearly all the wrong
+# ones. 0.30 trades some of that precision (~71% of what passes is right,
+# down from ~100%) for far better recall (~77% of correct predictions now
+# get shown, up from ~23%) -- more useful for a "flag things to check"
+# tool than a handful of near-certain answers. This is calibrated against
+# one video's 23 data points, not a large sample -- worth revisiting once
+# more labeled real footage exists.
+MUDRA_MIN_CONFIDENCE = 0.30
 
 
 def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
