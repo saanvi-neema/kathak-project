@@ -70,6 +70,22 @@ def rayleigh_test(phases):
     return float(R), p_value
 
 
+def last_beat_offset_sec(end_time_sec, beat_times):
+    """
+    Signed seconds between end_time_sec (typically the clip's duration) and
+    the LAST beat in beat_times -- the number needed for "you ended 1
+    second before the ending beat." Unlike compute_phases()/rayleigh_test()
+    (which check clustering against every beat interval), this only cares
+    about the one beat a piece is supposed to finish on. Positive = ended
+    after the last detected beat, negative = ended before it. Returns None
+    if beat_times is empty (no grid to compare against).
+    """
+    beat_times = np.asarray(beat_times)
+    if len(beat_times) == 0:
+        return None
+    return float(end_time_sec - beat_times[-1])
+
+
 def mean_phase(phases):
     """Circular mean of the phases, in [0, 1) -- where movements tend to cluster, if they do."""
     angles = phases * 2 * np.pi

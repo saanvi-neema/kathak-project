@@ -9,7 +9,7 @@ to catch double/triple-time footwork.
 import numpy as np
 import pytest
 
-from beat_sync_check import compute_phases, rayleigh_test, subdivision_rayleigh_test
+from beat_sync_check import compute_phases, rayleigh_test, subdivision_rayleigh_test, last_beat_offset_sec
 
 SEED = 42
 
@@ -72,3 +72,21 @@ def test_compute_phases_drops_events_outside_beat_grid_coverage():
     events = np.array([-5.0, 1000.0])  # before first beat, way after last beat
     phases = compute_phases(events, beat_times)
     assert len(phases) == 0
+
+
+def test_last_beat_offset_sec_ending_before_last_beat_is_negative():
+    beat_times = make_beat_grid(n_beats=10)  # last beat at 0.1 + 9*0.44 = 4.06
+    offset = last_beat_offset_sec(3.5, beat_times)
+    assert offset == pytest.approx(3.5 - 4.06, abs=1e-6)
+    assert offset < 0
+
+
+def test_last_beat_offset_sec_ending_after_last_beat_is_positive():
+    beat_times = make_beat_grid(n_beats=10)
+    offset = last_beat_offset_sec(5.0, beat_times)
+    assert offset == pytest.approx(5.0 - 4.06, abs=1e-6)
+    assert offset > 0
+
+
+def test_last_beat_offset_sec_empty_grid_returns_none():
+    assert last_beat_offset_sec(3.5, np.array([])) is None

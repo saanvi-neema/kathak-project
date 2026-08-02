@@ -288,6 +288,30 @@ def _extract_beat_grid(video_path, duration_sec):
             os.remove(wav_path)
 
 
+ENDING_OFFSET_FLAG_THRESHOLD_SEC = 0.5  # a reasoned deadzone (same spirit as TAAL_OFFSET_FLAG_THRESHOLD), not calibrated against real labeled endings yet -- none exists in this project
+
+
+def _flags_from_ending(duration_sec, beat_times):
+    """
+    Compares the clip's actual end time to the last beat in the detected
+    beat grid -- flags a performance that finished noticeably before or
+    after the music's last beat (methods.md step 6's "you ended 1 second
+    before the ending beat"). Pure logic, no audio I/O -- same split as
+    _taal_flags_from_chakkar, directly testable with a synthetic beat grid.
+    """
+    from beat_sync_check import last_beat_offset_sec
+    from report_assembly import Flag
+
+    offset = last_beat_offset_sec(duration_sec, beat_times)
+    if offset is None or abs(offset) < ENDING_OFFSET_FLAG_THRESHOLD_SEC:
+        return []
+    direction = "before" if offset < 0 else "after"
+    return [Flag(
+        duration_sec, "timing",
+        f"you ended about {abs(offset):.2f} seconds {direction} the ending beat."
+    )]
+
+
 def run_timing_analysis(video_path, features_csv, duration_sec):
     beat_grid = _extract_beat_grid(video_path, duration_sec)
     if beat_grid is None:
@@ -310,6 +334,7 @@ def run_timing_analysis(video_path, features_csv, duration_sec):
                                     window_sec=8.0, step_sec=2.0, min_events=5)
     accuracy = timing_accuracy_score(windowed, clip_duration_sec=duration_sec) if windowed else None
     flags = flags_from_beat_sync(windowed, category="timing") if windowed else []
+    flags.extend(_flags_from_ending(duration_sec, beat_times))
     return {"tempo_bpm": tempo_bpm, "windowed_results": windowed, "accuracy_score": accuracy, "flags": flags}
 
 
