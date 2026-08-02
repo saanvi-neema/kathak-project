@@ -83,6 +83,7 @@ function renderResults(data) {
   renderChakkar(data.chakkar, data.taal);
   renderTiming(data.timing);
   renderMudra(data.mudra);
+  renderRasa(data.rasa);
   renderReports(data.report_lines);
   renderPoseView(data);
 }
@@ -305,6 +306,29 @@ function renderMudra(mudra) {
     <h3>All identified holds</h3>
     ${eventsHtml}
   `;
+}
+
+function renderRasa(rasa) {
+  const note = document.getElementById("abhinaya-note");
+  const content = document.getElementById("abhinaya-content");
+
+  if (!rasa || rasa.length === 0) {
+    note.textContent = "No face detected in this clip, so no rasa (facial expression) reading could be made.";
+    content.innerHTML = "";
+    return;
+  }
+
+  note.textContent = "UNVALIDATED: these readings are a rule-based best guess (rasa_reference.py), not calibrated against real footage of anyone deliberately performing the navarasas -- none exists in this project yet. Treat this as a rough first pass, not ground truth. See methods.md.";
+
+  const eventsHtml = rasa.map(e => {
+    const cleanText = e.mismatch_count === 0 ? "clean match" : `${e.mismatch_count} criteria off`;
+    return `<div class="flag-item">
+      ${formatTime(e.start_sec)}&ndash;${formatTime(e.end_sec)}: <strong>${e.display_name}</strong>
+      (${e.confidence_label} confidence fit, ${cleanText})
+    </div>`;
+  }).join("");
+
+  content.innerHTML = `<h3>Sampled readings (every 1s)</h3>${eventsHtml}`;
 }
 
 function bindComparisonFileLabel(inputId, labelId) {

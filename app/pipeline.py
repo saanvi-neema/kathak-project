@@ -549,6 +549,62 @@ def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
     return events if events else None
 
 
+RASA_SAMPLE_INTERVAL_SEC = 1.0  # fixed sampling clock -- no "expression is stable now" detector exists yet, unlike mudra's held-window detection of hand poses
+
+
+def run_rasa_analysis(landmarks_csv):
+    """
+    Classifies which navarasa the face most closely matches in fixed
+    1-second windows across the clip (rasa_reference.classify_rasa),
+    averaging blendshapes within each window to smooth single-frame noise.
+    Samples on a fixed clock rather than detecting held-expression windows
+    the way run_mudra_analysis detects held hand poses, since no equivalent
+    "expression is stable now" detector exists for faces yet.
+
+    UNVALIDATED against real deliberate-abhinaya footage -- rasa_reference.py's
+    thresholds are reasoned defaults, not calibrated against real labeled
+    data (see methods.md). Reported plainly as a rough read, the same
+    honesty gap mudra classification had before mudra_01.mov existed to
+    test against. No accuracy score is computed here (unlike mudra/timing)
+    since there's nothing real yet to calibrate one against.
+
+    Returns None if the landmarks CSV has no face blendshape columns at all
+    (e.g. the face was never in frame -- see extract_landmarks.py).
+    """
+    from rasa_reference import classify_rasa, RASA_DEFINITIONS
+
+    df = pd.read_csv(landmarks_csv)
+    face_cols = [c for c in df.columns if c.startswith("face_")]
+    if not face_cols:
+        return None
+
+    t = df["timestamp_ms"].to_numpy(dtype=float) / 1000.0
+    if len(t) == 0:
+        return None
+    duration = float(t[-1])
+
+    events = []
+    window_start = 0.0
+    while window_start <= duration:
+        window_end = window_start + RASA_SAMPLE_INTERVAL_SEC
+        mask = (t >= window_start) & (t < window_end)
+        window = df.loc[mask, face_cols].dropna(how="all")
+        if not window.empty:
+            mean_row = {k: v for k, v in window.mean().to_dict().items() if pd.notna(v)}
+            best, mismatches, scores = classify_rasa(mean_row)
+            events.append({
+                "start_sec": window_start,
+                "end_sec": min(window_end, duration),
+                "rasa": best,
+                "display_name": RASA_DEFINITIONS[best]["display_name"],
+                "confidence_label": RASA_DEFINITIONS[best]["confidence"],
+                "mismatch_count": len(mismatches),
+            })
+        window_start += RASA_SAMPLE_INTERVAL_SEC
+
+    return events if events else None
+
+
 def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
     """
     Run the full available pipeline on one uploaded video. Returns a
@@ -567,6 +623,7 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
     timing = run_timing_analysis(video_path, features_csv, duration_sec)
     mudra_events = run_mudra_analysis(landmarks_csv)
     taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time)
+    rasa_events = run_rasa_analysis(landmarks_csv)
 
     overlay_filename = "pose_overlay.mp4"
     overlay_path = os.path.join(work_dir, overlay_filename)
@@ -605,6 +662,7 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
         "timing": timing,
         "taal": taal,  # None unless both taal_name and sam_time were supplied -- see run_taal_analysis
         "mudra": mudra,  # None until a trained classifier exists at MUDRA_MODEL_PATH -- see run_mudra_analysis
+        "rasa": rasa_events,  # UNVALIDATED against real footage -- see run_rasa_analysis. Not part of overall_score or report_lines.
         "overall_score": overall,
         "report_lines": report_lines,
         "overlay_video_filename": overlay_filename if overlay_ok else None,
