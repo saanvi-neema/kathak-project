@@ -29,6 +29,23 @@
           <input type="file" id="video-input" name="video" accept="video/*" required>
           <button type="submit">Analyze</button>
         </form>
+        <details class="taal-details">
+          <summary>Taal / sam (optional) -- checks chakkar landings against the taal cycle</summary>
+          <p class="subtext">Neither is auto-detected -- if you know the taal and can tell where the first sam falls in the video, this checks whether your chakkars land clean on sam. Leave blank to skip.</p>
+          <div class="taal-fields">
+            <label>Taal
+              <select id="taal-input" name="taal">
+                <option value="">(none)</option>
+                {% for name in taal_names %}
+                <option value="{{ name }}">{{ name.capitalize() }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>First sam (seconds into the video)
+              <input type="number" id="sam-time-input" name="sam_time" step="0.01" min="0" placeholder="e.g. 2.35">
+            </label>
+          </div>
+        </details>
         <div id="status" class="status"></div>
       </section>
 

@@ -53,6 +53,10 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
 
   const formData = new FormData();
   formData.append("video", fileInput.files[0]);
+  const taalValue = document.getElementById("taal-input").value;
+  const samTimeValue = document.getElementById("sam-time-input").value;
+  if (taalValue) formData.append("taal", taalValue);
+  if (samTimeValue) formData.append("sam_time", samTimeValue);
 
   status.textContent = "Analyzing... this can take a few minutes depending on video length.";
 
@@ -76,7 +80,7 @@ function renderResults(data) {
   document.getElementById("results").classList.remove("hidden");
 
   renderOverview(data);
-  renderChakkar(data.chakkar);
+  renderChakkar(data.chakkar, data.taal);
   renderTiming(data.timing);
   renderMudra(data.mudra);
   renderReports(data.report_lines);
@@ -191,22 +195,36 @@ function tempoCircleCard(bpm) {
     </div>`;
 }
 
-function renderChakkar(chakkar) {
+function renderChakkar(chakkar, taal) {
   const el = document.getElementById("chakkar-content");
   if (!chakkar) {
     el.innerHTML = `<div class="empty-state">No chakkar (rotation of at least half a turn) detected in this clip.</div>`;
     return;
   }
+
+  const taalByEndSec = {};
+  if (taal) {
+    for (const te of taal.events) taalByEndSec[te.end_sec] = te;
+  }
+  const taalNote = taal
+    ? `<p class="subtext">Chakkar-vs-sam checked against ${taal.taal.charAt(0).toUpperCase() + taal.taal.slice(1)} (sam at ${formatTime(taal.sam_time)}).</p>`
+    : "";
+
   el.innerHTML = `
     <p class="subtext">${chakkar.event_count} chakkar${chakkar.event_count === 1 ? "" : "s"} detected -- each scored separately, since they're distinct spin events, not one blended average.</p>
-    ${chakkar.events.map(renderChakkarEvent).join("")}
+    ${taalNote}
+    ${chakkar.events.map((e, i) => renderChakkarEvent(e, i, taalByEndSec[e.result.end_sec])).join("")}
     <h3>All flags</h3>
-    ${renderFlagList(chakkar.flags)}
+    ${renderFlagList(chakkar.flags.concat(taal ? taal.flags : []))}
   `;
 }
 
-function renderChakkarEvent(event, index) {
+function renderChakkarEvent(event, index, taalEvent) {
   const r = event.result;
+  const taalHtml = taalEvent ? `
+    <p class="subtext">
+      Ended ${Math.abs(taalEvent.beats_from_sam).toFixed(2)} beats ${taalEvent.beats_from_sam < 0 ? "before" : "after"} the nearest sam.
+    </p>` : "";
   const hasDrift = r.drift_shoulder_widths !== null && r.drift_shoulder_widths !== undefined;
   const driftHtml = hasDrift ? `
     <p class="subtext">
@@ -224,6 +242,7 @@ function renderChakkarEvent(event, index) {
       <div class="score-card"><div class="label">Ending orientation gap</div><div class="value">${r.orientation_gap_deg.toFixed(0)}&deg;</div></div>
       <div class="score-card"><div class="label">Stop quality</div><div class="value">${r.controlled_stop ? "Controlled" : "Abrupt"}</div></div>
     </div>
+    ${taalHtml}
     ${driftHtml}
   `;
 }

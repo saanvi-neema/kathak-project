@@ -17,6 +17,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from pipeline import analyze_video, run_comparison
+from taal_reference import TAAL_DEFINITIONS  # noqa: E402 -- scripts/ is already on sys.path via pipeline's import
 
 APP_DIR = os.path.dirname(__file__)
 UPLOAD_DIR = os.path.join(APP_DIR, "uploads")
@@ -55,7 +56,7 @@ def _cleanup_old_sessions(max_age_hours=SESSION_MAX_AGE_HOURS):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", taal_names=sorted(TAAL_DEFINITIONS))
 
 
 @app.route("/analyze", methods=["POST"])
@@ -79,8 +80,21 @@ def analyze():
     video_path = os.path.join(session_dir, filename)
     video_file.save(video_path)
 
+    # Both optional -- taal/sam aren't auto-detected (see taal_reference.py),
+    # so taal analysis is just honestly skipped unless both are supplied.
+    taal_name = request.form.get("taal") or None
+    if taal_name is not None and taal_name not in TAAL_DEFINITIONS:
+        return jsonify({"error": f"Unknown taal '{taal_name}'."}), 400
+    sam_time_raw = request.form.get("sam_time")
+    sam_time = None
+    if sam_time_raw:
+        try:
+            sam_time = float(sam_time_raw)
+        except ValueError:
+            return jsonify({"error": "Sam time must be a number (seconds)."}), 400
+
     try:
-        results = analyze_video(video_path, work_dir=session_dir)
+        results = analyze_video(video_path, work_dir=session_dir, taal_name=taal_name, sam_time=sam_time)
     except Exception:
         app.logger.exception("Analysis failed for session %s", session_id)
         return jsonify({"error": "Analysis failed -- check the server log for details."}), 500

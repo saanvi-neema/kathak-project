@@ -258,51 +258,119 @@ MIN_AUDIO_RMS = 0.02  # below this, treat it as room noise/silence, not real mus
 MIN_DURATION_FOR_WINDOWED_CHECK = 8.0  # matches windowed_sync_check's default window_sec
 
 
-def run_timing_analysis(video_path, features_csv, duration_sec):
-    wav_path = video_path + "_audio_tmp.wav"
+def _extract_beat_grid(video_path, duration_sec):
+    """
+    Shared beat-grid extraction for run_timing_analysis and
+    run_taal_analysis, so both don't decode the same audio twice. Returns
+    (tempo_bpm, beat_times) or None if there's not enough real audio signal
+    to trust a beat grid at all -- same gate run_timing_analysis always
+    used (a near-silent/room-noise track produces a fixed fallback tempo
+    artifact, not a real detected one).
+    """
+    wav_path = video_path + "_beatgrid_tmp.wav"
     if not extract_audio(video_path, wav_path):
         return None
-
     try:
         y, sr = librosa.load(wav_path, sr=None)
-
-        # A tempo estimate on near-silent audio is a known artifact (a fixed
-        # fallback value shows up regardless of content -- confirmed earlier
-        # this session on room-noise-only clips), not a real detected tempo.
-        # Don't report it at all rather than show a misleading number.
         rms = librosa.feature.rms(y=y)[0]
         if float(np.mean(rms)) < MIN_AUDIO_RMS:
             return None
-
         if duration_sec < MIN_DURATION_FOR_WINDOWED_CHECK:
-            return None  # too short for even one sync-check window to run
-
+            return None
         tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
         if len(beat_times) < 4:
-            return None  # not enough beat signal to say anything meaningful
-
-        feat = pd.read_csv(features_csv)
-        if "right_wrist_speed" not in feat.columns:
             return None
-        t_sec = feat["timestamp_ms"].to_numpy(dtype=float) / 1000.0
-        speed = feat["right_wrist_speed"].to_numpy()
-
-        from scipy.signal import find_peaks
-        valid_speed = np.nan_to_num(speed, nan=0)
-        threshold = np.nanpercentile(speed, 75) if np.any(~np.isnan(speed)) else 0
-        peaks, _ = find_peaks(valid_speed, height=threshold, distance=5)
-        peak_times = t_sec[peaks]
-
-        windowed = windowed_sync_check(peak_times, beat_times, clip_duration=duration_sec,
-                                        window_sec=8.0, step_sec=2.0, min_events=5)
-        accuracy = timing_accuracy_score(windowed, clip_duration_sec=duration_sec) if windowed else None
-        flags = flags_from_beat_sync(windowed, category="timing") if windowed else []
-        return {"tempo_bpm": float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo),
-                "windowed_results": windowed, "accuracy_score": accuracy, "flags": flags}
+        tempo_bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
+        return tempo_bpm, beat_times
     finally:
         if os.path.exists(wav_path):
             os.remove(wav_path)
+
+
+def run_timing_analysis(video_path, features_csv, duration_sec):
+    beat_grid = _extract_beat_grid(video_path, duration_sec)
+    if beat_grid is None:
+        return None
+    tempo_bpm, beat_times = beat_grid
+
+    feat = pd.read_csv(features_csv)
+    if "right_wrist_speed" not in feat.columns:
+        return None
+    t_sec = feat["timestamp_ms"].to_numpy(dtype=float) / 1000.0
+    speed = feat["right_wrist_speed"].to_numpy()
+
+    from scipy.signal import find_peaks
+    valid_speed = np.nan_to_num(speed, nan=0)
+    threshold = np.nanpercentile(speed, 75) if np.any(~np.isnan(speed)) else 0
+    peaks, _ = find_peaks(valid_speed, height=threshold, distance=5)
+    peak_times = t_sec[peaks]
+
+    windowed = windowed_sync_check(peak_times, beat_times, clip_duration=duration_sec,
+                                    window_sec=8.0, step_sec=2.0, min_events=5)
+    accuracy = timing_accuracy_score(windowed, clip_duration_sec=duration_sec) if windowed else None
+    flags = flags_from_beat_sync(windowed, category="timing") if windowed else []
+    return {"tempo_bpm": tempo_bpm, "windowed_results": windowed, "accuracy_score": accuracy, "flags": flags}
+
+
+TAAL_OFFSET_FLAG_THRESHOLD = 0.15  # beats; a reasoned deadzone (same spirit as chakkar's count_gap_threshold), not calibrated against real taal-labeled audio yet -- none exists in this project (see taal_reference.py)
+
+
+def _taal_flags_from_chakkar(chakkar_events, beat_times, taal_name, sam_time):
+    """
+    Pure logic, no audio I/O -- given already-extracted beat_times and a
+    list of chakkar_scoring events, computes each chakkar's signed distance
+    from the nearest sam (taal_reference.beats_from_sam) and flags any that
+    land far enough off to be a real landing error, not measurement noise.
+    Kept separate from run_taal_analysis() so this is directly testable
+    with synthetic data, same pattern as comparison.py's core functions.
+    """
+    from taal_reference import beats_from_sam
+    from report_assembly import Flag
+
+    events, flags = [], []
+    for event in chakkar_events:
+        end_sec = event["result"]["end_sec"]
+        offset = beats_from_sam(end_sec, beat_times, taal_name, sam_time)
+        if offset is None:
+            continue
+        events.append({
+            "start_sec": event["result"]["start_sec"], "end_sec": end_sec,
+            "beats_from_sam": float(offset),
+        })
+        if abs(offset) >= TAAL_OFFSET_FLAG_THRESHOLD:
+            direction = "before" if offset < 0 else "after"
+            flags.append(Flag(
+                end_sec, "taal",
+                f"your chakkar ended about {abs(offset):.2f} beats {direction} sam, not landing clean on the cycle."
+            ))
+    return events, flags
+
+
+def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time):
+    """
+    Checks chakkar landings against sam using the real taal cycle structure
+    (taal_reference.py). Requires taal_name + sam_time to be supplied --
+    neither is auto-detected (see taal_reference.py's module docstring for
+    why). Returns None if any of chakkar/taal_name/sam_time are missing, or
+    if there isn't enough audio signal for a beat grid.
+    """
+    if not taal_name or sam_time is None or not chakkar or not chakkar.get("events"):
+        return None
+
+    from taal_reference import TAAL_DEFINITIONS
+    if taal_name not in TAAL_DEFINITIONS:
+        return None
+
+    beat_grid = _extract_beat_grid(video_path, duration_sec)
+    if beat_grid is None:
+        return None
+    _, beat_times = beat_grid
+
+    events, flags = _taal_flags_from_chakkar(chakkar["events"], beat_times, taal_name, sam_time)
+    if not events:
+        return None
+    return {"taal": taal_name, "sam_time": sam_time, "events": events, "flags": flags}
 
 
 MIN_COMPARISON_ONSETS = 3  # too few onsets in a track to say anything meaningful about alignment
@@ -456,8 +524,14 @@ def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
     return events if events else None
 
 
-def analyze_video(video_path, work_dir):
-    """Run the full available pipeline on one uploaded video. Returns a results dict for the frontend."""
+def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
+    """
+    Run the full available pipeline on one uploaded video. Returns a
+    results dict for the frontend. taal_name/sam_time are optional --
+    supply both to get chakkar-vs-sam checks (see run_taal_analysis);
+    neither is auto-detected, so without them taal analysis is just
+    honestly skipped, same as every other optional signal in this pipeline.
+    """
     os.makedirs(work_dir, exist_ok=True)
     duration_sec = get_video_duration(video_path)
 
@@ -467,6 +541,7 @@ def analyze_video(video_path, work_dir):
     chakkar = run_chakkar_analysis(landmarks_csv)
     timing = run_timing_analysis(video_path, features_csv, duration_sec)
     mudra_events = run_mudra_analysis(landmarks_csv)
+    taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time)
 
     overlay_filename = "pose_overlay.mp4"
     overlay_path = os.path.join(work_dir, overlay_filename)
@@ -486,6 +561,8 @@ def analyze_video(video_path, work_dir):
         all_flags.extend(chakkar["flags"])
     if timing:
         all_flags.extend(timing["flags"])
+    if taal:
+        all_flags.extend(taal["flags"])
     all_flags.extend(mudra_flags)
     report_lines = assemble_report(all_flags)
 
@@ -501,6 +578,7 @@ def analyze_video(video_path, work_dir):
         "duration_sec": duration_sec,
         "chakkar": chakkar,
         "timing": timing,
+        "taal": taal,  # None unless both taal_name and sam_time were supplied -- see run_taal_analysis
         "mudra": mudra,  # None until a trained classifier exists at MUDRA_MODEL_PATH -- see run_mudra_analysis
         "overall_score": overall,
         "report_lines": report_lines,
