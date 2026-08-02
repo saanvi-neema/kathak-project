@@ -2,11 +2,12 @@
 Phase 1: Landmark Extraction
 Extracts body and hand landmarks from a video clip using MediaPipe's Tasks API.
 
-Uses PoseLandmarker + HandLandmarker (not the old mp.solutions API, which
-mediapipe 0.10.35 removed on Windows -- see the pilot scripts for the same
-workaround). Requires downloaded model bundles:
+Uses PoseLandmarker + HandLandmarker + FaceLandmarker (not the old
+mp.solutions API, which mediapipe 0.10.35 removed on Windows -- see the
+pilot scripts for the same workaround). Requires downloaded model bundles:
     models/pose_landmarker_full.task
     models/hand_landmarker.task
+    models/face_landmarker.task
 
 Outputs one CSV per clip to data/landmarks/.
 
@@ -29,6 +30,7 @@ VISIBILITY_THRESHOLD = 0.5
 
 POSE_MODEL_PATH = "models/pose_landmarker_full.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
+FACE_MODEL_PATH = "models/face_landmarker.task"
 
 # BlazePose 33-point topology, in landmark-index order. Same order as the old
 # mp.solutions.pose.PoseLandmark enum -- the Tasks API kept the same indices,
@@ -72,6 +74,27 @@ def make_hand_landmarker():
     return mp_vision.HandLandmarker.create_from_options(options)
 
 
+def make_face_landmarker():
+    """
+    output_face_blendshapes=True is the point of running this at all --
+    the 52 blendshape scores (mouthSmileLeft, browDownLeft, eyeWideRight,
+    jawOpen, noseSneerLeft, etc.) are semantically meaningful facial-muscle-
+    movement measurements, much closer to rasa_reference.py's expression
+    criteria than raw face landmark positions would be.
+    """
+    base_options = mp_python.BaseOptions(model_asset_path=FACE_MODEL_PATH)
+    options = mp_vision.FaceLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp_vision.RunningMode.VIDEO,
+        num_faces=1,
+        output_face_blendshapes=True,
+        min_face_detection_confidence=0.5,
+        min_face_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mp_vision.FaceLandmarker.create_from_options(options)
+
+
 def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> str:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -90,6 +113,7 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
 
     pose_landmarker = make_pose_landmarker()
     hand_landmarker = make_hand_landmarker()
+    face_landmarker = make_face_landmarker()
     try:
         frame_idx = 0
         last_ts = -1
@@ -108,6 +132,7 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
 
             pose_result = pose_landmarker.detect_for_video(mp_image, ts_ms)
             hand_result = hand_landmarker.detect_for_video(mp_image, ts_ms)
+            face_result = face_landmarker.detect_for_video(mp_image, ts_ms)
 
             row = {
                 "frame": frame_idx,
@@ -139,6 +164,12 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
                         row[f"hand_{hand_label}_{j}_y"] = round(p.y, 6)
                         row[f"hand_{hand_label}_{j}_z"] = round(p.z, 6)
 
+            # Face blendshapes (52 named scores) -- see rasa_reference.py for
+            # how these map to navarasa expressions.
+            if face_result.face_blendshapes:
+                for bs in face_result.face_blendshapes[0]:
+                    row[f"face_{bs.category_name}"] = round(bs.score, 4)
+
             rows.append(row)
 
             if frame_idx % 100 == 0:
@@ -148,6 +179,7 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
     finally:
         pose_landmarker.close()
         hand_landmarker.close()
+        face_landmarker.close()
 
     cap.release()
 
