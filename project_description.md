@@ -2,16 +2,16 @@
 
 ## Full planned project: Pose-Based Computational Analysis of Kathak
 
-7-phase pipeline, long-term vision. **Only the feasibility pilot below is actually being worked on right now** — this doc is the full picture for reference so later phases don't get designed from scratch.
+7-phase pipeline, long-term vision — this doc is the full picture for reference so later phases don't get designed from scratch. **The feasibility pilot below was never formally completed** (its own go/no-go criteria called for a 500-1000 frame manual QA pass, a 10-clip + harder-conditions dataset, and a tatkaar audio-onset experiment — none of that full scope happened) **but its early small-scale results were promising enough that development moved directly into building the real pipeline anyway**, described in methods.md's "Vertical Stack" section. That section is the up-to-date source of truth for what's built vs. not; this doc's pilot section below is kept as a historical record of why that jump felt justified, not a live status report or a claim that a formal go decision was made.
 
-**Open question — final deliverable format is not yet decided.** Everything below (and in the pilot) describes *methodology* (what to compute, what models to run) but not what form the finished project takes: a research paper/report, a usable app (upload video, get feedback), a trained model + benchmark results, or something else. This is deliberately left open for now — deciding it isn't needed to run the feasibility pilot, since the pilot's purpose is to establish whether the underlying techniques work at all before committing to any specific final presentation. Revisit this once the pilot's go/no-go verdict is in.
+**Deliverable format: decided.** It's a usable app — upload a video, get back a dashboard with a detailed, timestamped critique (see methods.md's "Vertical Stack" intro for the exact target example). Settled after the pilot succeeded; a dashboard mockup is the target reference for the app's shape.
 
 ### Phase 1: Pose and Landmark Extraction
 Goal: convert Kathak videos into structured motion data.
 
 - Body pose: MediaPipe Pose (chosen — passed pilot; MoveNet and YOLO-Pose dropped, see pilot notes below)
 - Hand landmarks: MediaPipe Hands (21 landmarks/hand: wrist, thumb/index/middle/ring/pinky joints)
-- Optional future: facial landmarks for head orientation / expression
+- Facial landmarks/expression: done — MediaPipe FaceLandmarker with blendshapes, added for navarasa/abhinaya analysis (see methods.md step 9). Not head-orientation tracking specifically (that's still hypothetical), but the expression half of this line is built.
 
 Input: Kathak performance video.
 Output: time-series of body keypoints `(x, y)` per joint + hand landmarks per frame.
@@ -25,7 +25,7 @@ Output: time-series of body keypoints `(x, y)` per joint + hand landmarks per fr
 
 **2B. Hand features (mudra analysis)**
 - Finger joint angles, extension, thumb position, relative finger distances, hand orientation
-- Possible tasks: mudra classification, hand trajectory analysis, transition detection, frequency stats
+- Possible tasks: mudra classification (**done** — see methods.md step 4), hand trajectory analysis, transition detection, frequency stats
 
 **2C. Footwork features (tatkaar analysis)**
 - From video: foot position/velocity/trajectory, left/right coordination
@@ -54,11 +54,11 @@ Compare CPU / GPU / FPGA (KV260 DPU) on FPS, latency, throughput, power, energy 
 
 ---
 
-## Current status: feasibility pilot (this is the actual active work)
+## Historical: the feasibility pilot (superseded — kept as a record of why the project moved forward)
 
-Decided (based on a prior ChatGPT conversation, full advice captured below) not to build the full 7-phase system yet. Body pose, hand tracking, chakkar counting, and tatkaar detection are independent technical risks — any one could fail without sinking the others — so the plan is a narrow go/no-go pilot before committing to the full project. Do NOT build mudra classification, skill-level prediction, beginner/intermediate/advanced datasets, overall dance scores, the 15 movement metrics, ML models, or FPGA work yet.
+Originally decided (based on a prior ChatGPT conversation, full advice captured below) not to build the full 7-phase system until a narrow go/no-go pilot passed, since body pose, hand tracking, chakkar counting, and tatkaar detection are independent technical risks that could each fail without sinking the others. **The pilot itself was never finished to its own criteria** (see Experiment 1/2/3 progress below — no formal go decision was made), but Experiments 1 and 2's early results (100% tracking detection, exact chakkar counts on 3 test clips) were promising enough that work moved directly into the real pipeline instead of waiting on the full planned dataset. That means the original "do not build yet" list below is now stale in places — mudra classification and overall dance scores are both built (methods.md step 4 and the Overview section) despite never being pilot-gated. Skill-level prediction, beginner/intermediate/advanced datasets, the full 15-movement-metric suite, ML modeling (Phase 6), and FPGA work (Phase 7) genuinely still haven't been started — methods.md's "Vertical Stack" section is the authoritative list of what's built vs. pending day to day.
 
-**Location**: `C:\Users\Saanvi\comp-sci\dance-project` (moved from an old-computer backup dir; not currently a git repo).
+**Location**: `C:\Users\Saanvi\comp-sci\dance-project` (moved from an old-computer backup dir; now a git repo, pushed to `https://github.com/saanvi-neema/kathak-project.git`).
 
 **Core question**: Can ordinary video contain enough reliable signal to measure a few Kathak techniques accurately enough to justify the full project?
 
@@ -76,9 +76,9 @@ First recordings: fixed camera, full body visible, decent lighting, plain backgr
 
 **Three pilot experiments:**
 
-1. **Pose tracking survival** — MediaPipe Pose vs MoveNet only (not three models). Draw skeleton overlays, manually inspect ~500-1000 sampled frames, label each Good / Usable / Failed, log confidence scores. Output a table of good/usable-frame % and major-failure count per movement type (basic stance, arm movement, fast tatkaar, chakkar, etc). **Decision rule**: define the threshold before looking at results — proceeding needs ≥90% usable frames on non-spin body movement. If tracking is good on normal movement but poor during chakkars, project isn't dead, chakkars just need a different detection method. If tracking collapses on almost all realistic movement, the pose-based plan needs a major redesign. *In progress, see below.*
+1. **Pose tracking survival** — MediaPipe Pose vs MoveNet only (not three models). Draw skeleton overlays, manually inspect ~500-1000 sampled frames, label each Good / Usable / Failed, log confidence scores. Output a table of good/usable-frame % and major-failure count per movement type (basic stance, arm movement, fast tatkaar, chakkar, etc). **Decision rule**: define the threshold before looking at results — proceeding needs ≥90% usable frames on non-spin body movement. If tracking is good on normal movement but poor during chakkars, project isn't dead, chakkars just need a different detection method. If tracking collapses on almost all realistic movement, the pose-based plan needs a major redesign. *Left incomplete at a small-sample stage, see progress below — not resumed since, work moved to the real pipeline instead.*
 
-2. **Chakkar counting** — the highest-priority experiment; likely flaw in the naive plan. `atan2(shoulder_y_diff, shoulder_x_diff)` is not guaranteed to give a clean monotonic 0°→360° signal from a frontal 2D video — side views can cause shoulder overlap, and front/back can look ambiguous, because a monocular camera is projecting a 3D rotation onto 2D (known limitation: occlusion + no depth). So test multiple candidate signals, not just shoulder-line geometry: left/right shoulder ordering, hip geometry, nose position relative to shoulders, ear visibility/confidence, periodicity of pose features. First goal is counting only — no angular acceleration/recovery-stability/spin-quality metrics yet. **Go/no-go**: ≥90% exact-count accuracy on controlled clips, ≥80% on harder clips. If the simple shoulder method fails but a signal combination works, that's still a good result. *In progress, see below — this is the one being actively tested.*
+2. **Chakkar counting** — the highest-priority experiment; likely flaw in the naive plan. `atan2(shoulder_y_diff, shoulder_x_diff)` is not guaranteed to give a clean monotonic 0°→360° signal from a frontal 2D video — side views can cause shoulder overlap, and front/back can look ambiguous, because a monocular camera is projecting a 3D rotation onto 2D (known limitation: occlusion + no depth). So test multiple candidate signals, not just shoulder-line geometry: left/right shoulder ordering, hip geometry, nose position relative to shoulders, ear visibility/confidence, periodicity of pose features. First goal is counting only — no angular acceleration/recovery-stability/spin-quality metrics yet. **Go/no-go**: ≥90% exact-count accuracy on controlled clips, ≥80% on harder clips. If the simple shoulder method fails but a signal combination works, that's still a good result. *Left incomplete at a small-sample stage (n=3 clips), see progress below — real chakkar work then continued directly in methods.md step 3 rather than expanding this pilot dataset.*
 
 3. **Tatkaar audio onset detection** — fully separate from foot pose tracking for this pilot. Manually annotate exact strike timestamps in an audio editor as ground truth (e.g. 0.52s, 0.91s, 1.31s...). Pipeline: audio → onset strength → peak detection → predicted timestamps. Match predicted-to-real within ±50ms. Measure precision, recall, F1, mean timing error. Test slow/medium/fast tatkaar, with and without music. **Go/no-go**: F1 ≥ 0.90 without music, F1 ≥ 0.80 with realistic accompaniment. If audio works but visual foot tracking doesn't, the project can still succeed as a multimodal system — possibly stronger than forcing pose estimation to do everything. *Not started.*
 
@@ -107,8 +107,8 @@ First recordings: fixed camera, full body visible, decent lighting, plain backgr
 - Still n=3 clips total, all one dancer/one setup — nowhere near the 10-clip controlled + harder-clip dataset in the plan, and no "harder" conditions (loose clothing, off-angle camera, faster spins, plain-vs-normal background) tested yet.
 - `methods.md` (project root) documents the testing methodology in plain language.
 
-**Next steps:**
-- Expand toward the full planned chakkar dataset (10 controlled clips + harder variants: loose clothing, faster spins, different camera angle, normal background) to actually test the 90%/80% go/no-go threshold rather than 3 hand-picked clips.
-- Fix rounding: the script currently rounds to nearest whole spin, which would mishandle real choreography with half/1.5 rotations ending front-facing. Not urgent for these controlled full-rotation clips (raw_est already shown), but needed before testing on real routines with partial rotations.
-- Experiment 3 hasn't been started — still need the 10 tatkaar clips per the dataset plan.
-- Experiment 1: keep recording more movement clips (ideally the separate stance/arms/torso/walking/combined clips per the plan, plus harder variants) while doing a fuller manual QA pass on the frames already captured.
+**Next steps (as originally planned for the pilot itself — mostly bypassed in practice, see below):**
+- Expand toward the full planned chakkar dataset (10 controlled clips + harder variants: loose clothing, faster spins, different camera angle, normal background) to actually test the 90%/80% go/no-go threshold rather than 3 hand-picked clips. **Never done** — chakkar work instead moved straight into real-footage multi-event segmentation and scoring (methods.md step 3), tested against an actual excerpted performance clip rather than more controlled single-spin clips.
+- ~~Fix rounding: the script currently rounds to nearest whole spin...~~ **Done, but as part of the real pipeline, not the pilot script**: `chakkar_scoring.py` rounds to the nearest clean landing and reports the gap (methods.md step 3), superseding this note.
+- Experiment 3 (tatkaar audio-onset detection) hasn't been started — still need the 10 tatkaar clips per the dataset plan. Still true; tatkaar remains the one pipeline step (methods.md step 7) blocked purely on missing footage.
+- Experiment 1: keep recording more movement clips (ideally the separate stance/arms/torso/walking/combined clips per the plan, plus harder variants) while doing a fuller manual QA pass on the frames already captured. Still true — the fuller QA pass never happened; `movement_01.mov` ended up reused directly as real-footage validation data for chakkar segmentation and drift instead (methods.md step 3).
