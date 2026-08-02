@@ -47,6 +47,15 @@
             </label>
           </div>
         </details>
+        <details class="taal-details">
+          <summary>Expected mudra sequence (optional) -- checks IDs against what you actually performed, not just self-consistency</summary>
+          <p class="subtext">Without this, "Mudra Accuracy" only measures whether the identified mudra's own shape rule holds -- not whether the identification was correct (a wrong-but-confident guess can still look clean). List the mudras you performed, in order, one per line or comma-separated, and you'll get a real identification-accuracy score instead.</p>
+          <div class="taal-fields">
+            <label>Mudra sequence, in order
+              <textarea id="expected-mudras-input" name="expected_mudras" rows="3" placeholder="e.g. pataka, tripataka, ardhapataka, mushti"></textarea>
+            </label>
+          </div>
+        </details>
         <div id="status" class="status"></div>
       </section>
 

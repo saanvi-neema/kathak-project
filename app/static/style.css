@@ -154,11 +154,18 @@ button:hover {
 }
 
 .taal-fields select,
-.taal-fields input {
+.taal-fields input,
+.taal-fields textarea {
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.taal-fields textarea {
+  min-width: 260px;
+  resize: vertical;
 }
 
 .hidden {

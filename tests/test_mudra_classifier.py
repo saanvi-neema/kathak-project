@@ -63,6 +63,58 @@ def test_predict_mudra_returns_correct_label_and_confidence(tmp_path):
     assert 0.0 < confidence <= 1.0
 
 
+def test_train_and_evaluate_saves_feature_means(tmp_path):
+    df = make_synthetic_dataset(n_frames_per_class=40)
+    dataset_csv = tmp_path / "dataset.csv"
+    df.to_csv(dataset_csv, index=False)
+    model_out = tmp_path / "model.joblib"
+    train_and_evaluate(str(dataset_csv), model_out=str(model_out))
+
+    import joblib
+    bundle = joblib.load(model_out)
+    assert "feature_means" in bundle
+    assert set(bundle["feature_means"].keys()) == set(bundle["feature_names"])
+
+
+def test_predict_mudra_raises_on_bundle_without_feature_means():
+    """A model saved before this fix (see methods.md step 4) shouldn't
+    silently reintroduce the old row-mean bug -- it should fail loudly and
+    say to retrain, not guess."""
+    bundle = {"model": None, "feature_names": ["a", "b"]}
+    with pytest.raises(ValueError):
+        predict_mudra(bundle, {"a": 1.0, "b": 2.0})
+
+
+def test_predict_mudra_imputes_missing_features_from_training_set_mean_not_row_mean():
+    """Regression for a real bug (caught in an external review): predict_mudra()
+    used to fill a missing feature with THIS ROW's own mean across its other,
+    unrelated features (e.g. averaging a distance measurement together with a
+    0/1 extended flag) instead of that feature's actual typical value from
+    training. Verified directly by inspecting the exact row handed to the
+    model, using a stub model so the assertion doesn't depend on a real
+    classifier's sensitivity to one feature."""
+
+    class _StubModel:
+        classes_ = np.array(["mushti"])
+
+        def predict_proba(self, X):
+            _StubModel.last_input = X
+            return np.array([[1.0]])
+
+    bundle = {
+        "model": _StubModel(),
+        "feature_names": ["a", "b", "c"],
+        "feature_means": {"a": 100.0, "b": 200.0, "c": 300.0},
+    }
+    # "b" is missing from the input row -- this row's OWN mean across "a"/"c"
+    # would be (10 + 30) / 2 = 20, wildly different from the training mean of 200.
+    feature_row = {"a": 10.0, "c": 30.0}
+
+    predict_mudra(bundle, feature_row)
+    filled_row = _StubModel.last_input.iloc[0]
+    assert filled_row["b"] == 200.0  # the training-set mean, not this row's own mean (20.0)
+
+
 def test_too_few_frames_per_mudra_is_dropped_not_crashed(tmp_path):
     df = make_synthetic_dataset(n_frames_per_class=40)
     # cripple one class down to almost nothing

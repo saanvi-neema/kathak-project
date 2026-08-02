@@ -29,7 +29,7 @@ from extract_features import extract_features, compute_hand_features  # noqa: E4
 from chakkar_scoring import score_chakkar_events  # noqa: E402
 from beat_sync_check import windowed_sync_check  # noqa: E402
 from report_assembly import flags_from_chakkar, flags_from_beat_sync, flags_from_mudra_checks, assemble_report  # noqa: E402
-from score_aggregation import chakkar_quality_score, timing_accuracy_score, mudra_accuracy_score, count_checked_constraints, overall_score  # noqa: E402
+from score_aggregation import chakkar_quality_score, timing_accuracy_score, mudra_rule_agreement_score, mudra_identification_accuracy_score, count_checked_constraints, overall_score  # noqa: E402
 from comparison import compare_performances  # noqa: E402
 
 # Same BlazePose connection subset used in the pilot scripts' overlay drawing.
@@ -474,7 +474,7 @@ MUDRA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mudra_
 MUDRA_MIN_CONFIDENCE = 0.30
 
 
-def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
+def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequence=None):
     """
     Identifies which mudra (if any) is being held during each stable hand
     pose in the video (mudra_classifier.py), then checks that identified
@@ -482,6 +482,20 @@ def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
     (mudra_reference.py) -- combining "what mudra is this" with "is it
     formed correctly", which was the actual target behavior described early
     in this project, not just identification alone.
+
+    That rule check is NOT identification accuracy -- it only tests whether
+    the observed hand shape agrees with whatever mudra the classifier
+    guessed, never whether the guess itself was right (a real circularity,
+    caught in an external review -- see methods.md step 4 and
+    score_aggregation.mudra_rule_agreement_score's docstring). To get an
+    actual identification-accuracy signal, pass `expected_sequence`: an
+    ordered list of the mudra names the dancer actually intended to perform
+    (e.g. from a known practice sequence, same idea as mudra_01.mov's
+    verified recording order). Each detected hold, in time order, is
+    compared positionally against that list -- event i vs expected_sequence[i]
+    -- and gets `expected_mudra`/`matches_expected` fields. If the counts
+    don't line up (extra or missed detections), the trailing events just
+    get no expected label (`None`) rather than a forced, likely-wrong pairing.
 
     Returns None if no trained model exists yet at model_path -- the honest
     default until real mudra training footage is recorded and
@@ -546,7 +560,27 @@ def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH):
             })
 
     events.sort(key=lambda e: e["start_sec"])
+    _attach_expected_mudras(events, expected_sequence)
     return events if events else None
+
+
+def _attach_expected_mudras(events, expected_sequence):
+    """
+    Pure positional-matching logic, pulled out of run_mudra_analysis so it's
+    testable without needing to synthesize real hand-motion data to produce
+    multiple held windows. `events` (already time-sorted) get an
+    `expected_mudra`/`matches_expected` field each, matching event i against
+    expected_sequence[i]. Extra events past the end of expected_sequence are
+    left unmatched (None/None) rather than force-paired with nothing.
+    """
+    expected_sequence = expected_sequence or []
+    for i, e in enumerate(events):
+        if i < len(expected_sequence):
+            e["expected_mudra"] = expected_sequence[i]
+            e["matches_expected"] = (e["mudra"] == expected_sequence[i])
+        else:
+            e["expected_mudra"] = None
+            e["matches_expected"] = None
 
 
 RASA_SAMPLE_INTERVAL_SEC = 1.0  # fixed sampling clock -- no "expression is stable now" detector exists yet, unlike mudra's held-window detection of hand poses
@@ -605,13 +639,20 @@ def run_rasa_analysis(landmarks_csv):
     return events if events else None
 
 
-def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
+def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_mudra_sequence=None):
     """
     Run the full available pipeline on one uploaded video. Returns a
     results dict for the frontend. taal_name/sam_time are optional --
     supply both to get chakkar-vs-sam checks (see run_taal_analysis);
     neither is auto-detected, so without them taal analysis is just
     honestly skipped, same as every other optional signal in this pipeline.
+
+    expected_mudra_sequence is also optional -- an ordered list of mudra
+    names the dancer intended to perform, if known. Without it, mudra
+    scoring is limited to rule-agreement (see run_mudra_analysis's
+    docstring for why that's not the same as accuracy); with it, a real
+    identification-accuracy score becomes possible and takes priority in
+    overall_score.
     """
     os.makedirs(work_dir, exist_ok=True)
     duration_sec = get_video_duration(video_path)
@@ -621,7 +662,7 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
 
     chakkar = run_chakkar_analysis(landmarks_csv)
     timing = run_timing_analysis(video_path, features_csv, duration_sec)
-    mudra_events = run_mudra_analysis(landmarks_csv)
+    mudra_events = run_mudra_analysis(landmarks_csv, expected_sequence=expected_mudra_sequence)
     taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time)
     rasa_events = run_rasa_analysis(landmarks_csv)
 
@@ -631,12 +672,20 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
 
     mudra_flags = []
     mudra_check_results = []
+    mudra_id_matches = []
     if mudra_events:
         for e in mudra_events:
             if e["mismatches"] is not None:
                 mudra_flags.extend(flags_from_mudra_checks([(e["end_sec"], e["mudra"], e["mismatches"])]))
                 mudra_check_results.append((e["mismatches"], e["constraints_checked"]))
-    mudra_score = mudra_accuracy_score(mudra_check_results) if mudra_check_results else None
+            if e["matches_expected"] is not None:
+                mudra_id_matches.append(e["matches_expected"])
+    mudra_rule_score = mudra_rule_agreement_score(mudra_check_results) if mudra_check_results else None
+    mudra_id_score = mudra_identification_accuracy_score(mudra_id_matches) if mudra_id_matches else None
+    # Prefer real identification accuracy (checked against an actual expected
+    # label) over rule-agreement (checked only against the classifier's own
+    # guess) wherever both exist -- see run_mudra_analysis's docstring.
+    mudra_score_for_overall = mudra_id_score if mudra_id_score is not None else mudra_rule_score
 
     all_flags = []
     if chakkar:
@@ -649,12 +698,17 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None):
     report_lines = assemble_report(all_flags)
 
     overall = overall_score(
-        mudra_score=mudra_score,
+        mudra_score=mudra_score_for_overall,
         chakkar_score=chakkar["quality_score"] if chakkar else None,
         timing_score=timing["accuracy_score"] if timing else None,
     )
 
-    mudra = {"events": mudra_events, "accuracy_score": mudra_score, "flags": mudra_flags} if mudra_events else None
+    mudra = {
+        "events": mudra_events,
+        "rule_agreement_score": mudra_rule_score,
+        "identification_accuracy_score": mudra_id_score,
+        "flags": mudra_flags,
+    } if mudra_events else None
 
     return {
         "duration_sec": duration_sec,

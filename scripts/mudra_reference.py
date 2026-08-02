@@ -4,9 +4,13 @@ Phase 2B/4: Mudra reference definitions and correctness checking.
 Encodes each mudra as a rule over the features already computed by
 extract_features.py (hand_<side>_<finger>_extended, hand_<side>_thumb_to_<finger>_tip,
 hand_<side>_<finger1>_<finger2>_spread). Definitions transcribed directly from
-the descriptions given for this project -- not independently verified against
-real footage yet, since that needs the ground-truth timestamps this file is
-blocked on (see methods.md).
+the descriptions given for this project, then independently verified against
+real recorded footage (mudra_01.mov's known mudra sequence) -- see the "Real
+bug found and fixed" note below and methods.md step 4 for that verification
+and the threshold fix it led to. (This docstring used to say identification
+was still blocked on ground-truth timestamps; that was true when first
+written, stale by the time the fix below happened, and never updated --
+exactly the kind of stale-doc mismatch worth catching on a later pass.)
 
 "touch" is checked as thumb-to-fingertip distance (normalized by hand_scale
 in extract_features.py -- wrist-to-middle-MCP "palm length", so this is

@@ -9,6 +9,7 @@ Usage:
 
 import dataclasses
 import os
+import re
 import shutil
 import time
 import uuid
@@ -93,8 +94,23 @@ def analyze():
         except ValueError:
             return jsonify({"error": "Sam time must be a number (seconds)."}), 400
 
+    # Optional, free-text, not validated against a closed reference list --
+    # unlike taal (a fixed dropdown), mudra names here have to match whatever
+    # the classifier's own training labels use, so strict validation would
+    # just create false rejections. Comma- or newline-separated, in the
+    # order the dancer actually performed them.
+    expected_mudras_raw = request.form.get("expected_mudras", "")
+    expected_mudra_sequence = [
+        name.strip().lower()
+        for name in expected_mudras_raw.replace(",", "\n").splitlines()
+        if name.strip()
+    ] or None
+
     try:
-        results = analyze_video(video_path, work_dir=session_dir, taal_name=taal_name, sam_time=sam_time)
+        results = analyze_video(
+            video_path, work_dir=session_dir, taal_name=taal_name, sam_time=sam_time,
+            expected_mudra_sequence=expected_mudra_sequence,
+        )
     except Exception:
         app.logger.exception("Analysis failed for session %s", session_id)
         return jsonify({"error": "Analysis failed -- check the server log for details."}), 500
@@ -146,8 +162,25 @@ def compare():
     return jsonify(serialize_results(results))
 
 
+SESSION_ID_RE = re.compile(r"^[0-9a-f]{12}$")  # matches uuid.uuid4().hex[:12], the only format /analyze and /compare ever generate
+
+
 @app.route("/media/<session_id>/<filename>")
 def media(session_id, filename):
+    """
+    Real bug found and fixed in an audit: session_id came straight from the
+    URL into send_from_directory()'s DIRECTORY argument (not just the
+    filename) -- Flask's own docs call this out explicitly as unsafe,
+    since send_from_directory only sanitizes the filename against path
+    traversal, not the directory. Confirmed directly, not just theorized:
+    a request to /media/../server.py returned this file's own source before
+    this fix. Every session_id this app ever generates is
+    uuid.uuid4().hex[:12] -- a fixed-length lowercase hex string -- so
+    anything that doesn't match that shape is rejected outright, closing
+    off "..", "/", and anything else that isn't a real session id.
+    """
+    if not SESSION_ID_RE.match(session_id):
+        return jsonify({"error": "Invalid session id."}), 404
     session_dir = os.path.join(UPLOAD_DIR, session_id)
     return send_from_directory(session_dir, filename)
 

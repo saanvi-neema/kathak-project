@@ -5,7 +5,10 @@ stop-quality check).
 Builds on chakkar_pilot.py's proven rotation-counting signal (validated:
 exact match on 1/3/10-spin clips). This module turns a raw rotation count
 into the actual feedback described in the target output, e.g.:
-"you did about 3.75 spins instead of 4" / "did not end facing front".
+"you did about 3.75 spins instead of 4" / "did not return to your starting
+orientation" (NOT "did not end facing front" -- there's no external
+reference for where "front" actually is, just wherever the dancer started;
+see the orientation_gap comment below).
 
 Reads the *_angles.csv files chakkar_pilot.py already produces.
 
@@ -42,16 +45,20 @@ def score_chakkar(angles_csv: str) -> dict:
     rounded_count = round(raw_count / CLEAN_LANDING_STEP) * CLEAN_LANDING_STEP
     count_gap = raw_count - rounded_count
 
-    # 2. Ending orientation vs. "front" -- front is defined as wherever the
-    # dancer was facing at the start (mean of the first 10 known frames),
-    # since that's the only reference available without external input.
-    # Must average the UNWRAPPED angle, not the raw wrapped one -- a plain
-    # mean of wrapped values is wrong whenever the window straddles the
-    # +-180 discontinuity (e.g. [179.9, -179.9] naively averages near 0,
+    # 2. Ending orientation vs. starting orientation -- NOT vs. "front"/stage-
+    # front/camera-facing. There's no external reference available (no stage
+    # markers, no camera-facing calibration), so this can only measure
+    # whether the dancer returned to wherever THEY were facing at the start
+    # (mean of the first 10 known frames) -- a real, useful signal, but a
+    # narrower claim than "facing front" implies, and user-facing text needs
+    # to say so (a real gap an external review caught -- see methods.md
+    # step 3). Must average the UNWRAPPED angle, not the raw wrapped one --
+    # a plain mean of wrapped values is wrong whenever the window straddles
+    # the +-180 discontinuity (e.g. [179.9, -179.9] naively averages near 0,
     # when the correct answer is ~180). Unwrapped has no such jump.
-    front_ref = np.mean(unwrapped[:10])
+    start_ref = np.mean(unwrapped[:10])
     ending_ref = np.mean(unwrapped[-10:])
-    orientation_gap = ((ending_ref - front_ref + 180) % 360) - 180  # wrap to [-180, 180]
+    orientation_gap = ((ending_ref - start_ref + 180) % 360) - 180  # wrap to [-180, 180]
 
     # 3. Stop quality: compare rotation speed in the final stretch of the
     # clip to the peak speed reached anywhere in the clip. A controlled,
@@ -229,7 +236,7 @@ def score_chakkar_segment(df, start_sec, end_sec, pad_sec=SEGMENT_SCORE_PAD_SEC)
     """
     Scores one rotation segment using the same measures as score_chakkar()
     (count vs. clean landing, ending orientation, stop quality), but scoped
-    to just that segment's own frames -- front/end orientation measured at
+    to just that segment's own frames -- start/end orientation measured at
     the segment's own start/end, not the whole clip's. Kept as separate
     logic from score_chakkar() rather than refactored to share code, since
     that function's exact behavior is pinned by ground-truth regression
@@ -260,9 +267,9 @@ def score_chakkar_segment(df, start_sec, end_sec, pad_sec=SEGMENT_SCORE_PAD_SEC)
     count_gap = raw_count - rounded_count
 
     edge_n = min(10, max(2, len(t) // 4))
-    front_ref = np.mean(unwrapped[:edge_n])
+    start_ref = np.mean(unwrapped[:edge_n])
     ending_ref = np.mean(unwrapped[-edge_n:])
-    orientation_gap = ((ending_ref - front_ref + 180) % 360) - 180
+    orientation_gap = ((ending_ref - start_ref + 180) % 360) - 180
 
     dt = np.gradient(t)
     dt[dt == 0] = np.nan
@@ -325,10 +332,10 @@ def describe(result: dict) -> str:
         )
 
     if abs(result["orientation_gap_deg"]) < 15:
-        lines.append("Ended facing front (within tolerance).")
+        lines.append("Ended near your starting orientation (within tolerance).")
     else:
         side = "left" if result["orientation_gap_deg"] > 0 else "right"
-        lines.append(f"Did not end facing front -- off by about {abs(result['orientation_gap_deg']):.0f} degrees to the {side}.")
+        lines.append(f"Did not return to your starting orientation -- off by about {abs(result['orientation_gap_deg']):.0f} degrees to the {side}.")
 
     if result["controlled_stop"]:
         lines.append("Stop looked controlled (smooth deceleration).")

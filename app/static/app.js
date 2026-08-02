@@ -57,6 +57,8 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
   const samTimeValue = document.getElementById("sam-time-input").value;
   if (taalValue) formData.append("taal", taalValue);
   if (samTimeValue) formData.append("sam_time", samTimeValue);
+  const expectedMudrasValue = document.getElementById("expected-mudras-input").value;
+  if (expectedMudrasValue.trim()) formData.append("expected_mudras", expectedMudrasValue);
 
   status.textContent = "Analyzing... this can take a few minutes depending on video length.";
 
@@ -143,17 +145,29 @@ function renderOverview(data) {
       </div>`;
   }
 
-  if (data.mudra && data.mudra.accuracy_score !== null && data.mudra.accuracy_score !== undefined) {
-    const mudraAccuracy = data.mudra.accuracy_score;
-    container.innerHTML += `
-      <div class="score-card">
-        <div class="label">Mudra Accuracy</div>
-        <div class="value ${scoreClass(mudraAccuracy)}">${fmtScore(mudraAccuracy)}%</div>
-      </div>
-      <div class="score-card">
-        <div class="label">Mudra Holds Identified</div>
-        <div class="value">${data.mudra.events.length}</div>
-      </div>`;
+  if (data.mudra) {
+    const hasIdScore = data.mudra.identification_accuracy_score !== null && data.mudra.identification_accuracy_score !== undefined;
+    const hasRuleScore = data.mudra.rule_agreement_score !== null && data.mudra.rule_agreement_score !== undefined;
+    if (hasIdScore) {
+      container.innerHTML += `
+        <div class="score-card">
+          <div class="label">Mudra ID Accuracy</div>
+          <div class="value ${scoreClass(data.mudra.identification_accuracy_score)}">${fmtScore(data.mudra.identification_accuracy_score)}%</div>
+        </div>`;
+    } else if (hasRuleScore) {
+      container.innerHTML += `
+        <div class="score-card">
+          <div class="label">Mudra Rule Agreement</div>
+          <div class="value ${scoreClass(data.mudra.rule_agreement_score)}">${fmtScore(data.mudra.rule_agreement_score)}%</div>
+        </div>`;
+    }
+    if (hasIdScore || hasRuleScore) {
+      container.innerHTML += `
+        <div class="score-card">
+          <div class="label">Mudra Holds Identified</div>
+          <div class="value">${data.mudra.events.length}</div>
+        </div>`;
+    }
   }
 
   if (!data.chakkar && !data.timing && !data.mudra) {
@@ -277,14 +291,20 @@ function renderMudra(mudra) {
 
   note.textContent = "Identification is trained on a Bharatanatyam photo dataset (not Kathak footage) -- treat predictions as a first pass, not ground truth. See methods.md for known limits.";
 
-  const rateHtml = mudra.accuracy_score === null || mudra.accuracy_score === undefined
-    ? ""
-    : `<div class="score-grid" style="margin-bottom: 16px;">
+  const hasIdScore = mudra.identification_accuracy_score !== null && mudra.identification_accuracy_score !== undefined;
+  const rateHtml = `<div class="score-grid" style="margin-bottom: 16px;">
+    ${hasIdScore ? `
          <div class="score-card">
-           <div class="label">Mudra Accuracy</div>
-           <div class="value ${scoreClass(mudra.accuracy_score)}">${fmtScore(mudra.accuracy_score)}%</div>
-         </div>
-       </div>`;
+           <div class="label">Identification Accuracy</div>
+           <div class="value ${scoreClass(mudra.identification_accuracy_score)}">${fmtScore(mudra.identification_accuracy_score)}%</div>
+         </div>` : ""}
+    ${mudra.rule_agreement_score === null || mudra.rule_agreement_score === undefined ? "" : `
+         <div class="score-card">
+           <div class="label">Rule Agreement</div>
+           <div class="value ${scoreClass(mudra.rule_agreement_score)}">${fmtScore(mudra.rule_agreement_score)}%</div>
+         </div>`}
+    </div>
+    <p class="subtext">Rule Agreement checks whether each identified mudra's own shape looks correct -- it does NOT confirm the identification itself was right (a confident wrong guess can still score high here). ${hasIdScore ? "Identification Accuracy is the real check, against the mudra sequence you provided." : "Enter your expected mudra sequence on the upload form for a real identification-accuracy score instead."}</p>`;
 
   const eventsHtml = mudra.events.map(e => {
     const cls = e.mismatches && e.mismatches.length ? "flag-item" : "";
@@ -293,9 +313,12 @@ function renderMudra(mudra) {
       : e.mismatches.length
         ? e.mismatches.join("; ")
         : "matches the reference shape";
+    const expectedText = e.expected_mudra
+      ? ` &mdash; expected <strong>${e.expected_mudra}</strong> (${e.matches_expected ? "correct" : "mismatch"})`
+      : "";
     return `<div class="${cls}">
       ${formatTime(e.start_sec)}&ndash;${formatTime(e.end_sec)} (${e.hand_side} hand): <strong>${e.mudra}</strong>
-      (confidence ${(e.confidence * 100).toFixed(0)}%) &mdash; ${mismatchText}
+      (confidence ${(e.confidence * 100).toFixed(0)}%) &mdash; ${mismatchText}${expectedText}
     </div>`;
   }).join("");
 

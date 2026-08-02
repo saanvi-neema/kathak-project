@@ -104,3 +104,51 @@ def test_run_mudra_analysis_reports_mismatches_for_a_malformed_hold(tmp_path, sy
     assert events is not None and len(events) >= 1
     assert events[0]["mudra"] == "mushti"
     assert events[0]["mismatches"] == ["pinky should be curled but was extended"]
+
+
+def test_run_mudra_analysis_without_expected_sequence_leaves_match_fields_none(tmp_path, synthetic_model):
+    landmarks_csv = make_landmarks_csv(tmp_path, "mushti")
+    events = pipeline.run_mudra_analysis(landmarks_csv, model_path=synthetic_model)
+    assert events[0]["expected_mudra"] is None
+    assert events[0]["matches_expected"] is None
+
+
+def test_run_mudra_analysis_flags_a_correct_identification_against_expected_sequence(tmp_path, synthetic_model):
+    landmarks_csv = make_landmarks_csv(tmp_path, "mushti")
+    events = pipeline.run_mudra_analysis(landmarks_csv, model_path=synthetic_model, expected_sequence=["mushti"])
+    assert events[0]["expected_mudra"] == "mushti"
+    assert events[0]["matches_expected"] is True
+
+
+def test_run_mudra_analysis_flags_a_wrong_identification_against_expected_sequence(tmp_path, synthetic_model):
+    """The exact circularity scenario: the classifier's guess ('mushti')
+    passes its own rule check every time, but that says nothing about
+    whether it was actually the mudra the dancer intended ('pataka' here)."""
+    landmarks_csv = make_landmarks_csv(tmp_path, "mushti")
+    events = pipeline.run_mudra_analysis(landmarks_csv, model_path=synthetic_model, expected_sequence=["pataka"])
+    assert events[0]["mismatches"] == []  # rule agreement still looks clean
+    assert events[0]["expected_mudra"] == "pataka"
+    assert events[0]["matches_expected"] is False  # but the identification was wrong
+
+
+def test_attach_expected_mudras_leaves_trailing_events_unmatched_when_sequence_is_shorter():
+    """More detected holds than the supplied expected sequence -- the extras
+    shouldn't get force-paired with something that doesn't exist. Tested
+    directly against the extracted pure helper rather than trying to
+    synthesize real hand-motion data that produces multiple held windows
+    (which the underlying detector doesn't reliably do from a single
+    continuous static pose, regardless of frame count)."""
+    events = [{"mudra": "mushti"}, {"mudra": "pataka"}, {"mudra": "tripataka"}]
+    pipeline._attach_expected_mudras(events, ["mushti"])
+    assert events[0]["expected_mudra"] == "mushti"
+    assert events[0]["matches_expected"] is True
+    for e in events[1:]:
+        assert e["expected_mudra"] is None
+        assert e["matches_expected"] is None
+
+
+def test_attach_expected_mudras_handles_no_expected_sequence():
+    events = [{"mudra": "mushti"}]
+    pipeline._attach_expected_mudras(events, None)
+    assert events[0]["expected_mudra"] is None
+    assert events[0]["matches_expected"] is None

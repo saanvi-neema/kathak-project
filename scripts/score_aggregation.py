@@ -16,8 +16,21 @@ exists.
 import numpy as np
 
 
-def mudra_accuracy_score(mudra_check_results):
+def mudra_rule_agreement_score(mudra_check_results):
     """
+    NOT identification accuracy -- this measures something narrower and
+    easy to mistake for it. `run_mudra_analysis()` predicts a mudra with
+    the classifier, then checks the SAME predicted label's own geometric
+    rule against the observed hand shape. So this score answers "does the
+    hand shape agree with whatever mudra the classifier guessed" -- a
+    confidently WRONG guess (e.g. tripataka misread as ardhapataka) can
+    still score high here, because it's only checking the guess against
+    itself, never against what the dancer actually intended. That's a real
+    circularity, caught in an external review, not a hypothetical -- see
+    methods.md step 4. Use mudra_identification_accuracy_score() instead
+    for anything claiming to measure whether the identification was RIGHT
+    -- that one needs an actual expected-mudra sequence to compare against.
+
     mudra_check_results: list of (mismatches, constraints_checked) tuples,
     one per mudra instance checked in the video. `mismatches` is the list
     returned by mudra_reference.check_mudra(); `constraints_checked` is how
@@ -35,6 +48,25 @@ def mudra_accuracy_score(mudra_check_results):
     if not per_mudra_scores:
         return None
     return 100 * float(np.mean(per_mudra_scores))
+
+
+def mudra_identification_accuracy_score(match_results):
+    """
+    The actual identification-accuracy score mudra_rule_agreement_score()
+    can't provide -- this compares each predicted mudra against a real
+    expected label (supplied by the user, e.g. a known practice sequence),
+    not against itself. Only meaningful when expected labels exist; the
+    dashboard must not show this as if it always applies.
+
+    match_results: list of bools, one per mudra event that HAD an expected
+    label to compare against (True = predicted label matched expected).
+    Events with no expected label (index ran past the supplied sequence)
+    should be excluded before calling this, not passed in as False.
+    Returns a 0-100 score, or None if the list is empty.
+    """
+    if not match_results:
+        return None
+    return 100 * float(np.mean(match_results))
 
 
 def count_checked_constraints(rule):
@@ -85,6 +117,16 @@ def timing_accuracy_score(windowed_results, clip_duration_sec):
     Returns the % of the clip's duration NOT covered by a "not synchronized"
     window (merged for overlap, so double-counted overlapping windows don't
     understate the score).
+
+    Clamped to [0, 100] -- a real bug an external review caught: without
+    clamping, this could return a NEGATIVE score. windowed_sync_check()
+    allows a window to end up to 1e-9s past clip_duration (its own
+    floating-point tolerance), and this function trusts whatever
+    windowed_results/clip_duration_sec it's given rather than re-deriving
+    one from the other -- so unsynced_duration can exceed clip_duration_sec
+    by a hair even in normal use, or by a lot if a caller ever passes
+    windowed_results computed against a different duration than the one
+    supplied here. A negative "accuracy" is nonsensical either way.
     """
     if not windowed_results:
         return None
@@ -101,7 +143,8 @@ def timing_accuracy_score(windowed_results, clip_duration_sec):
             merged.append((start, end))
 
     unsynced_duration = sum(end - start for start, end in merged)
-    return 100 * (1 - unsynced_duration / clip_duration_sec)
+    score = 100 * (1 - unsynced_duration / clip_duration_sec)
+    return max(0.0, min(100.0, score))
 
 
 def overall_score(mudra_score=None, chakkar_score=None, timing_score=None):

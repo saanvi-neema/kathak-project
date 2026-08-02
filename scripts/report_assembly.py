@@ -6,8 +6,14 @@ scoring, beat-sync checking, mudra checking) and turns them into one sorted,
 timestamped, plain-English list -- the actual final output described in
 methods.md's target example:
 
-    "At 0:42, your chakkar did not end facing front, you did about 3.75
-    spins instead of 4. At 1:10, your movements were not on beat."
+    "At 0:42, your chakkar did not return to your starting orientation, you
+    did about 3.75 spins instead of 4. At 1:10, your movements were not on
+    beat."
+
+    (NOT "did not end facing front" -- there's no external reference for
+    where "front" is, e.g. camera-facing or stage-front; chakkar_scoring.py
+    can only measure whether the dancer returned to wherever they started.
+    A real gap an external review caught -- see methods.md step 3.)
 
 This module does no analysis of its own -- it only formats results that
 chakkar_scoring.py, beat_sync_check.py, and mudra_reference.py already
@@ -44,7 +50,7 @@ def flags_from_chakkar(score_result, end_time_sec, count_gap_threshold=0.05, ori
         side = "left" if score_result["orientation_gap_deg"] > 0 else "right"
         flags.append(Flag(
             end_time_sec, "chakkar",
-            f"your chakkar did not end facing front -- off by about "
+            f"your chakkar did not return to your starting orientation -- off by about "
             f"{abs(score_result['orientation_gap_deg']):.0f} degrees to the {side}."
         ))
 

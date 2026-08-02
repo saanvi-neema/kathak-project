@@ -1,15 +1,45 @@
 """
 Tests for the housekeeping pieces added to app/server.py: file-type
-validation and automatic cleanup of old session folders. Only these pure
-helpers are tested, not the Flask routes themselves -- routing/upload
-handling is thin glue around analyze_video()/run_comparison(), which are
-already covered indirectly through their own module tests.
+validation and automatic cleanup of old session folders. Most of this
+module's logic is thin glue around analyze_video()/run_comparison(),
+already covered indirectly through their own module tests -- but the
+/media route is tested directly (via Flask's test client) below, because
+"thin glue" is exactly where a real path-traversal bug was found (see
+test_media_route_rejects_path_traversal_attempts). Route-level behavior
+isn't automatically safe just because the underlying logic is simple.
 """
 
 import os
 import time
 
 import server
+
+
+def test_media_route_rejects_path_traversal_attempts():
+    """
+    Real bug found in an audit, confirmed by actually exploiting it before
+    the fix: session_id came straight from the URL into
+    send_from_directory()'s DIRECTORY argument, which Flask's own docs warn
+    is unsafe (only the filename argument is sanitized against traversal).
+    A request to /media/../server.py returned this project's own server
+    source before the fix. Tests the exact attack, plus URL-encoded
+    variants, and confirms a well-formed-but-nonexistent session id still
+    gets an ordinary 404 (not wrongly rejected as invalid).
+    """
+    server.app.testing = True
+    client = server.app.test_client()
+
+    for path in ["/media/../server.py", "/media/..%2Fserver.py", "/media/%2e%2e/server.py",
+                 "/media/not-a-hex-session-id/server.py"]:
+        resp = client.get(path)
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Invalid session id."}, \
+            f"{path} should be rejected by the session_id format check, not merely 404 from a missing file"
+
+    resp = client.get("/media/0123456789ab/foo.mp4")
+    assert resp.status_code == 404
+    assert resp.get_json() != {"error": "Invalid session id."}, \
+        "a well-formed session id (even if the session doesn't exist) should reach send_from_directory, not the format check"
 
 
 def test_allowed_video_extensions_accepted():

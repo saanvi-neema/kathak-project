@@ -84,7 +84,11 @@ def train_and_evaluate(dataset_csv, model_out=None, test_size=TEST_SIZE, random_
 
     # A few NaN feature values are expected (e.g. a finger briefly occluded
     # mid-hold) -- mean-impute rather than drop the whole row over one bad joint.
-    X = X.fillna(X.mean(numeric_only=True))
+    # Saved into the model bundle below so predict_mudra() can impute missing
+    # inference-time features the same way, instead of a per-row mean across
+    # that row's own unrelated features (a real bug -- see methods.md step 4).
+    feature_means = X.mean(numeric_only=True)
+    X = X.fillna(feature_means)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=y
@@ -105,7 +109,12 @@ def train_and_evaluate(dataset_csv, model_out=None, test_size=TEST_SIZE, random_
 
     if model_out:
         os.makedirs(os.path.dirname(model_out), exist_ok=True)
-        joblib.dump({"model": model, "feature_names": list(X.columns), "labels": labels}, model_out)
+        joblib.dump({
+            "model": model,
+            "feature_names": list(X.columns),
+            "labels": labels,
+            "feature_means": feature_means.to_dict(),
+        }, model_out)
         print(f"\nSaved model to {model_out}")
 
     return model, report, matrix
@@ -117,13 +126,28 @@ def predict_mudra(model_bundle, feature_row):
     of the hand_<side>_ prefix (same convention build_feature_matrix uses).
     Returns (predicted_label, confidence) or (None, None) if a required
     feature is entirely missing.
+
+    Missing features are filled with the TRAINING SET's own per-feature mean
+    (model_bundle["feature_means"]), matching how train_and_evaluate() fills
+    NaNs at training time. A real bug, caught in an external review: this
+    used to fill with THIS ROW's mean across its own unrelated features
+    (averaging e.g. a thumb-to-pinky distance together with an
+    extended/curled 0-1 flag) -- a semantically meaningless fill value with
+    no connection to what that missing feature's typical value actually is.
+    See methods.md step 4.
     """
     model = model_bundle["model"]
     feature_names = model_bundle["feature_names"]
+    if "feature_means" not in model_bundle:
+        raise ValueError(
+            "This model was trained before per-feature imputation stats were saved "
+            "(see methods.md step 4) -- retrain with the current mudra_classifier.py."
+        )
     row = pd.Series(feature_row).reindex(feature_names)
     if row.isna().all():
         return None, None
-    row = row.fillna(row.mean())
+    feature_means = pd.Series(model_bundle["feature_means"]).reindex(feature_names)
+    row = row.fillna(feature_means)
     proba = model.predict_proba(row.to_frame().T)[0]
     best_idx = int(np.argmax(proba))
     return model.classes_[best_idx], float(proba[best_idx])
