@@ -30,7 +30,7 @@ from chakkar_scoring import score_chakkar_events  # noqa: E402
 from beat_sync_check import windowed_sync_check  # noqa: E402
 from report_assembly import flags_from_chakkar, flags_from_beat_sync, flags_from_mudra_checks, assemble_report  # noqa: E402
 from score_aggregation import chakkar_quality_score, timing_accuracy_score, mudra_rule_agreement_score, mudra_identification_accuracy_score, count_checked_constraints, overall_score  # noqa: E402
-from comparison import compare_performances  # noqa: E402
+from comparison import compare_performances, find_dense_stretches  # noqa: E402
 
 # Same BlazePose connection subset used in the pilot scripts' overlay drawing.
 BODY_CONNECTIONS = [
@@ -258,31 +258,42 @@ MIN_AUDIO_RMS = 0.02  # below this, treat it as room noise/silence, not real mus
 MIN_DURATION_FOR_WINDOWED_CHECK = 8.0  # matches windowed_sync_check's default window_sec
 
 
+def _beat_grid_from_audio(y, sr, duration_sec):
+    """
+    Pure beat-grid logic (RMS gate, duration gate, tempo/beat detection),
+    split out of _extract_beat_grid so a live capture session's in-memory
+    rolling audio buffer can reuse it directly, without a redundant
+    wav-file round trip. Returns (tempo_bpm, beat_times) or None if there's
+    not enough real audio signal to trust a beat grid at all -- same gates
+    _extract_beat_grid always used (a near-silent/room-noise track produces
+    a fixed fallback tempo artifact, not a real detected one).
+    """
+    rms = librosa.feature.rms(y=y)[0]
+    if float(np.mean(rms)) < MIN_AUDIO_RMS:
+        return None
+    if duration_sec < MIN_DURATION_FOR_WINDOWED_CHECK:
+        return None
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    if len(beat_times) < 4:
+        return None
+    tempo_bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
+    return tempo_bpm, beat_times
+
+
 def _extract_beat_grid(video_path, duration_sec):
     """
     Shared beat-grid extraction for run_timing_analysis and
-    run_taal_analysis, so both don't decode the same audio twice. Returns
-    (tempo_bpm, beat_times) or None if there's not enough real audio signal
-    to trust a beat grid at all -- same gate run_timing_analysis always
-    used (a near-silent/room-noise track produces a fixed fallback tempo
-    artifact, not a real detected one).
+    run_taal_analysis, so both don't decode the same audio twice. Extracts
+    audio from the given video file, then delegates the actual detection
+    logic to _beat_grid_from_audio.
     """
     wav_path = video_path + "_beatgrid_tmp.wav"
     if not extract_audio(video_path, wav_path):
         return None
     try:
         y, sr = librosa.load(wav_path, sr=None)
-        rms = librosa.feature.rms(y=y)[0]
-        if float(np.mean(rms)) < MIN_AUDIO_RMS:
-            return None
-        if duration_sec < MIN_DURATION_FOR_WINDOWED_CHECK:
-            return None
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-        if len(beat_times) < 4:
-            return None
-        tempo_bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
-        return tempo_bpm, beat_times
+        return _beat_grid_from_audio(y, sr, duration_sec)
     finally:
         if os.path.exists(wav_path):
             os.remove(wav_path)
@@ -312,8 +323,15 @@ def _flags_from_ending(duration_sec, beat_times):
     )]
 
 
-def run_timing_analysis(video_path, features_csv, duration_sec):
-    beat_grid = _extract_beat_grid(video_path, duration_sec)
+def run_timing_analysis(video_path, features_csv, duration_sec, beat_grid=None):
+    """
+    beat_grid: pass a precomputed (tempo_bpm, beat_times) tuple (e.g. from
+    _beat_grid_from_audio) to skip re-extracting audio from video_path -- a
+    live capture session already has its rolling audio buffer in memory.
+    Falls back to the normal video_path-based extraction if not supplied.
+    """
+    if beat_grid is None:
+        beat_grid = _extract_beat_grid(video_path, duration_sec)
     if beat_grid is None:
         return None
     tempo_bpm, beat_times = beat_grid
@@ -372,13 +390,17 @@ def _taal_flags_from_chakkar(chakkar_events, beat_times, taal_name, sam_time):
     return events, flags
 
 
-def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time):
+def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time, beat_grid=None):
     """
     Checks chakkar landings against sam using the real taal cycle structure
     (taal_reference.py). Requires taal_name + sam_time to be supplied --
     neither is auto-detected (see taal_reference.py's module docstring for
     why). Returns None if any of chakkar/taal_name/sam_time are missing, or
     if there isn't enough audio signal for a beat grid.
+
+    beat_grid: pass a precomputed (tempo_bpm, beat_times) tuple to skip
+    re-extracting audio from video_path -- see run_timing_analysis's
+    docstring for why (live capture sessions already hold this in memory).
     """
     if not taal_name or sam_time is None or not chakkar or not chakkar.get("events"):
         return None
@@ -387,7 +409,8 @@ def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time):
     if taal_name not in TAAL_DEFINITIONS:
         return None
 
-    beat_grid = _extract_beat_grid(video_path, duration_sec)
+    if beat_grid is None:
+        beat_grid = _extract_beat_grid(video_path, duration_sec)
     if beat_grid is None:
         return None
     _, beat_times = beat_grid
@@ -425,6 +448,49 @@ def _onset_signal(video_path, tmp_wav_path):
             os.remove(tmp_wav_path)
 
 
+def run_tatkaar_analysis(video_path, work_dir):
+    """
+    Single-video tatkaar (rhythmic footwork) detection -- pipeline step 7,
+    previously unbuilt (see methods.md). Audio-based, not pose-based: a
+    tatkaar phrase produces a sustained run of closely-spaced percussive
+    onsets (foot/ghungroo strikes), which is exactly what comparison.py's
+    find_dense_stretches() was already built to detect for teacher-vs-
+    student comparison -- reused here unmodified, just run on one video's
+    own onsets instead of comparing two tracks.
+
+    UNVALIDATED against real tatkaar footage -- find_dense_stretches()'s
+    thresholds (DENSE_GAP_THRESHOLD_SEC, MIN_DENSE_STRETCH_ONSETS) are
+    reasoned defaults, never checked against a real recording (none exists
+    in this project yet -- see methods.md). Also inherits comparison.py's
+    honest limitation: an onset can't be told apart from a clap or any
+    other percussive movement sound, only counted.
+
+    Returns None if there isn't enough audio signal to detect onsets at all
+    (_onset_signal's RMS gate), or no dense stretch is found -- same
+    "honestly report nothing" pattern as the rest of this pipeline, not a
+    forced zero-strike result.
+    """
+    tmp_wav_path = os.path.join(work_dir, "tatkaar_audio_tmp.wav")
+    signal = _onset_signal(video_path, tmp_wav_path)
+    if signal is None:
+        return None
+
+    stretches = find_dense_stretches(signal["onset_times"])
+    if not stretches:
+        return None
+
+    events = []
+    for s in stretches:
+        duration = s["end"] - s["start"]
+        events.append({
+            "start_sec": s["start"],
+            "end_sec": s["end"],
+            "strike_count": s["count"],
+            "strikes_per_sec": (s["count"] / duration) if duration > 0 else None,
+        })
+    return {"events": events}
+
+
 def run_comparison(teacher_video_path, student_video_path, work_dir):
     """
     Teacher-vs-student comparison (methods.md Comparison tab). Returns None
@@ -459,22 +525,28 @@ def run_comparison(teacher_video_path, student_video_path, work_dir):
 
 
 MUDRA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mudra_training", "model.joblib")
-# A prediction below this isn't reported. Calibrated against the 23 real,
-# individually-verified hold-windows from mudra_01.mov (see methods.md) --
-# correct predictions averaged confidence 0.44, wrong ones averaged 0.29,
-# a real but not clean separation (correct as low as 0.23, wrong as high as
-# 0.49). The old default of 0.5 was far too conservative: it only let
-# through 23% of the correct predictions just to avoid nearly all the wrong
-# ones. 0.30 trades some of that precision (~71% of what passes is right,
-# down from ~100%) for far better recall (~77% of correct predictions now
-# get shown, up from ~23%) -- more useful for a "flag things to check"
-# tool than a handful of near-certain answers. This is calibrated against
-# one video's 23 data points, not a large sample -- worth revisiting once
-# more labeled real footage exists.
+# A prediction below this isn't reported. Originally calibrated against 23
+# real, individually-verified hold-windows from mudra_01.mov (see
+# methods.md) -- correct predictions averaged confidence 0.44, wrong ones
+# averaged 0.29, a real but not clean separation. 0.30 was chosen to trade
+# some precision for much better recall (see methods.md for the full
+# reasoning).
+#
+# model.joblib was retrained (predict_mudra() added a required
+# feature_means bundle key the old on-disk model predated -- the old model
+# raised on every prediction until this retrain). A spot-check against
+# mudra_01.mov's real footage after retraining shows the same shape of
+# result (24 detected hold-windows, confidence mean ~0.46, predicted labels
+# in the same relative order as the previously hand-verified correct
+# answers), but the rigorous per-window accuracy number above has NOT been
+# re-verified against the retrained model -- that required a human
+# checking each hold against the real recording order, which hasn't been
+# redone yet. Treat the 23-data-point numbers above as pre-retrain history,
+# not a current calibration guarantee, until that re-check happens.
 MUDRA_MIN_CONFIDENCE = 0.30
 
 
-def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequence=None):
+def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequence=None, model_bundle=None):
     """
     Identifies which mudra (if any) is being held during each stable hand
     pose in the video (mudra_classifier.py), then checks that identified
@@ -501,16 +573,22 @@ def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequ
     default until real mudra training footage is recorded and
     mudra_classifier.py is run (see methods.md); the dashboard already
     reports that plainly instead of faking a result.
-    """
-    if not os.path.exists(model_path):
-        return None
 
-    import joblib
+    model_bundle: pass an already-loaded bundle (joblib.load(model_path)'s
+    return value) to skip loading it from disk. The real model file is
+    174MB -- a live capture session calls this every ~1-2 seconds and needs
+    to load it once per session, not once per call.
+    """
     from build_mudra_training_data import hand_motion_magnitude, find_held_windows
     from mudra_classifier import predict_mudra
     from mudra_reference import check_mudra_variants, MUDRA_RULES
 
-    bundle = joblib.load(model_path)
+    bundle = model_bundle
+    if bundle is None:
+        if not os.path.exists(model_path):
+            return None
+        import joblib
+        bundle = joblib.load(model_path)
 
     df = pd.read_csv(landmarks_csv)
     t = df["timestamp_ms"].to_numpy(dtype=float) / 1000.0
@@ -665,6 +743,7 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
     mudra_events = run_mudra_analysis(landmarks_csv, expected_sequence=expected_mudra_sequence)
     taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time)
     rasa_events = run_rasa_analysis(landmarks_csv)
+    tatkaar = run_tatkaar_analysis(video_path, work_dir)
 
     overlay_filename = "pose_overlay.mp4"
     overlay_path = os.path.join(work_dir, overlay_filename)
@@ -717,6 +796,7 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
         "taal": taal,  # None unless both taal_name and sam_time were supplied -- see run_taal_analysis
         "mudra": mudra,  # None until a trained classifier exists at MUDRA_MODEL_PATH -- see run_mudra_analysis
         "rasa": rasa_events,  # UNVALIDATED against real footage -- see run_rasa_analysis. Not part of overall_score or report_lines.
+        "tatkaar": tatkaar,  # UNVALIDATED against real footage -- see run_tatkaar_analysis. Not part of overall_score or report_lines.
         "overall_score": overall,
         "report_lines": report_lines,
         "overlay_video_filename": overlay_filename if overlay_ok else None,

@@ -380,3 +380,57 @@ button:hover {
   font-size: 0.85rem;
   font-style: italic;
 }
+
+.live-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.live-divider::before,
+.live-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.live-start {
+  text-align: center;
+}
+
+.live-start button {
+  background: var(--bad);
+}
+
+#live-capture {
+  margin-top: 20px;
+}
+
+#live-preview {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  max-height: 60vh;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  margin: 0 auto;
+  background: #000;
+}
+
+.live-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.live-indicator {
+  color: var(--bad);
+  font-size: 0.85rem;
+  font-weight: 600;
+}

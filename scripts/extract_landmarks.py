@@ -95,6 +95,75 @@ def make_face_landmarker():
     return mp_vision.FaceLandmarker.create_from_options(options)
 
 
+def next_video_timestamp_ms(frame_idx, fps, last_ts):
+    """
+    Monotonic-guarded ts_ms rule extract_landmarks() has always used, factored
+    out so a live capture session (see app/live_pipeline.py) can keep counting
+    seamlessly across many separate short video chunks instead of resetting
+    to 0 at the start of each one.
+    """
+    ts_ms = int((frame_idx / fps) * 1000)
+    if ts_ms <= last_ts:
+        ts_ms = last_ts + 1
+    return ts_ms
+
+
+def extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, frame_bgr, frame_idx, ts_ms):
+    """
+    Runs all three landmarkers on one already-decoded BGR frame and returns
+    one row dict in extract_landmarks()'s CSV row schema. Pure function of
+    its inputs (no other state) -- factored out of extract_landmarks()'s loop
+    body so a live capture session can reuse the same long-lived landmarker
+    instances across many chunks instead of recreating them (and reloading
+    the .task model bundles) every chunk. extract_landmarks() itself calls
+    this unchanged, so its own output is unaffected by this split.
+    """
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+    pose_result = pose_landmarker.detect_for_video(mp_image, ts_ms)
+    hand_result = hand_landmarker.detect_for_video(mp_image, ts_ms)
+    face_result = face_landmarker.detect_for_video(mp_image, ts_ms)
+
+    row = {
+        "frame": frame_idx,
+        "timestamp_ms": ts_ms,
+    }
+
+    # Body landmarks (33 keypoints)
+    if pose_result.pose_landmarks:
+        lm = pose_result.pose_landmarks[0]
+        for i, name in enumerate(BODY_LANDMARK_NAMES):
+            p = lm[i]
+            # Always store visibility; only store position if confident
+            row[f"body_{name}_vis"] = round(p.visibility, 4)
+            if p.visibility >= VISIBILITY_THRESHOLD:
+                row[f"body_{name}_x"] = round(p.x, 6)
+                row[f"body_{name}_y"] = round(p.y, 6)
+                row[f"body_{name}_z"] = round(p.z, 6)
+            else:
+                row[f"body_{name}_x"] = None
+                row[f"body_{name}_y"] = None
+                row[f"body_{name}_z"] = None
+
+    # Hand landmarks (21 keypoints per hand)
+    if hand_result.hand_landmarks and hand_result.handedness:
+        for hand_lm, handedness in zip(hand_result.hand_landmarks, hand_result.handedness):
+            hand_label = handedness[0].category_name.lower()  # "left" or "right"
+            for j, p in enumerate(hand_lm):
+                row[f"hand_{hand_label}_{j}_x"] = round(p.x, 6)
+                row[f"hand_{hand_label}_{j}_y"] = round(p.y, 6)
+                row[f"hand_{hand_label}_{j}_z"] = round(p.z, 6)
+
+    # Face blendshapes (52 named scores) -- see rasa_reference.py for
+    # how these map to navarasa expressions.
+    if face_result.face_blendshapes:
+        for bs in face_result.face_blendshapes[0]:
+            row[f"face_{bs.category_name}"] = round(bs.score, 4)
+
+    return row
+
+
 def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> str:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -122,54 +191,10 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
             if not ret:
                 break
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-
-            ts_ms = int((frame_idx / fps) * 1000)
-            if ts_ms <= last_ts:
-                ts_ms = last_ts + 1
+            ts_ms = next_video_timestamp_ms(frame_idx, fps, last_ts)
             last_ts = ts_ms
 
-            pose_result = pose_landmarker.detect_for_video(mp_image, ts_ms)
-            hand_result = hand_landmarker.detect_for_video(mp_image, ts_ms)
-            face_result = face_landmarker.detect_for_video(mp_image, ts_ms)
-
-            row = {
-                "frame": frame_idx,
-                "timestamp_ms": ts_ms,
-            }
-
-            # Body landmarks (33 keypoints)
-            if pose_result.pose_landmarks:
-                lm = pose_result.pose_landmarks[0]
-                for i, name in enumerate(BODY_LANDMARK_NAMES):
-                    p = lm[i]
-                    # Always store visibility; only store position if confident
-                    row[f"body_{name}_vis"] = round(p.visibility, 4)
-                    if p.visibility >= VISIBILITY_THRESHOLD:
-                        row[f"body_{name}_x"] = round(p.x, 6)
-                        row[f"body_{name}_y"] = round(p.y, 6)
-                        row[f"body_{name}_z"] = round(p.z, 6)
-                    else:
-                        row[f"body_{name}_x"] = None
-                        row[f"body_{name}_y"] = None
-                        row[f"body_{name}_z"] = None
-
-            # Hand landmarks (21 keypoints per hand)
-            if hand_result.hand_landmarks and hand_result.handedness:
-                for hand_lm, handedness in zip(hand_result.hand_landmarks, hand_result.handedness):
-                    hand_label = handedness[0].category_name.lower()  # "left" or "right"
-                    for j, p in enumerate(hand_lm):
-                        row[f"hand_{hand_label}_{j}_x"] = round(p.x, 6)
-                        row[f"hand_{hand_label}_{j}_y"] = round(p.y, 6)
-                        row[f"hand_{hand_label}_{j}_z"] = round(p.z, 6)
-
-            # Face blendshapes (52 named scores) -- see rasa_reference.py for
-            # how these map to navarasa expressions.
-            if face_result.face_blendshapes:
-                for bs in face_result.face_blendshapes[0]:
-                    row[f"face_{bs.category_name}"] = round(bs.score, 4)
-
+            row = extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, frame, frame_idx, ts_ms)
             rows.append(row)
 
             if frame_idx % 100 == 0:

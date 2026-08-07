@@ -84,6 +84,7 @@ function renderResults(data) {
   renderOverview(data);
   renderChakkar(data.chakkar, data.taal);
   renderTiming(data.timing);
+  renderTatkaar(data.tatkaar);
   renderMudra(data.mudra);
   renderRasa(data.rasa);
   renderReports(data.report_lines);
@@ -263,7 +264,7 @@ function renderChakkarEvent(event, index, taalEvent) {
 }
 
 function renderTiming(timing) {
-  const el = document.getElementById("tatkaar-content");
+  const el = document.getElementById("timing-content");
   if (!timing) {
     el.innerHTML = `<div class="empty-state">Not enough audio/beat signal detected in this clip to check timing.</div>`;
     return;
@@ -275,8 +276,29 @@ function renderTiming(timing) {
     </div>
     <h3>Flags</h3>
     ${renderFlagList(timing.flags)}
-    <p class="subtext">Note: this checks arm-movement timing against the beat, since foot-tracking needs footage validated for footwork specifically. See Tatkaar Analysis limitations in project notes.</p>
+    <p class="subtext">Note: this checks arm-movement timing against the beat, not footwork -- see the Tatkaar tab for that.</p>
   `;
+}
+
+function renderTatkaar(tatkaar) {
+  const note = document.getElementById("tatkaar-note");
+  const content = document.getElementById("tatkaar-content");
+
+  if (!tatkaar || !tatkaar.events || tatkaar.events.length === 0) {
+    note.textContent = "No sustained rhythmic footwork stretch (tatkaar) detected in this clip's audio.";
+    content.innerHTML = "";
+    return;
+  }
+
+  note.textContent = "UNVALIDATED: detected from audio onsets (foot/ghungroo strike sounds), not calibrated against real tatkaar footage -- none exists in this project yet. Can't tell a foot strike apart from a clap or other percussive sound, only count them. See methods.md.";
+
+  content.innerHTML = tatkaar.events.map((e, i) => `
+    <div class="flag-item">
+      Stretch ${i + 1}: ${formatTime(e.start_sec)}&ndash;${formatTime(e.end_sec)} --
+      <strong>${e.strike_count} strikes</strong>
+      ${e.strikes_per_sec !== null && e.strikes_per_sec !== undefined ? `(~${e.strikes_per_sec.toFixed(1)}/sec)` : ""}
+    </div>
+  `).join("");
 }
 
 function renderMudra(mudra) {
@@ -472,3 +494,162 @@ function renderReports(lines) {
     list.appendChild(li);
   });
 }
+
+// ---- Live capture ----
+// Records short chunks by cycling MediaRecorder.start()/stop() (each stop()
+// finalizes a fully self-contained, independently-decodable container --
+// unlike a single recorder with `timeslice`, whose later chunks are
+// headerless continuations nothing but the same recorder can decode).
+// Each chunk is POSTed to /live/chunk, which returns a snapshot shaped
+// exactly like /analyze's response -- so the existing renderResults() is
+// reused unmodified for live updates too.
+let liveSessionId = null;
+let liveStream = null;
+let liveRunning = false;
+const LIVE_CHUNK_MS = 1500;
+
+function pickSupportedMimeType() {
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4",
+  ];
+  for (const c of candidates) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return "";
+}
+
+async function recordOneLiveChunk(mimeType) {
+  return new Promise((resolve, reject) => {
+    const recorder = new MediaRecorder(liveStream, mimeType ? { mimeType } : undefined);
+    const parts = [];
+    const startedAt = performance.now();
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) parts.push(e.data); };
+    recorder.onstop = () => {
+      const durationSec = (performance.now() - startedAt) / 1000;
+      resolve({ blob: new Blob(parts, { type: recorder.mimeType }), durationSec });
+    };
+    recorder.onerror = (e) => reject(e.error || e);
+    recorder.start();
+    setTimeout(() => { if (recorder.state !== "inactive") recorder.stop(); }, LIVE_CHUNK_MS);
+  });
+}
+
+async function liveRecordLoop() {
+  const mimeType = pickSupportedMimeType();
+  const liveStatus = document.getElementById("live-status");
+  while (liveRunning) {
+    try {
+      const { blob, durationSec } = await recordOneLiveChunk(mimeType);
+      if (!liveRunning) break;
+      const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+      const resp = await fetch(
+        `/live/chunk?session_id=${encodeURIComponent(liveSessionId)}&ext=${ext}&duration_sec=${durationSec}`,
+        { method: "POST", headers: { "Content-Type": blob.type || "application/octet-stream" }, body: blob }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        liveStatus.textContent = `Error: ${data.error || "live chunk failed"}`;
+        continue;
+      }
+      liveStatus.textContent = "";
+      renderResults(data);
+    } catch (err) {
+      liveStatus.textContent = `Error: ${err.message}`;
+    }
+  }
+}
+
+function showLiveResultsShell() {
+  hasAnalyzedVideo = true;
+  document.getElementById("upload-panel").classList.add("hidden");
+  document.getElementById("results").classList.remove("hidden");
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.add("hidden"));
+  document.getElementById("tab-overview").classList.remove("hidden");
+  document.querySelectorAll(".tab:not(.disabled)").forEach(t => t.classList.remove("active"));
+  const overviewTab = document.querySelector('.tab[data-tab="overview"]');
+  if (overviewTab) overviewTab.classList.add("active");
+}
+
+async function startLive() {
+  const status = document.getElementById("status");
+  const mimeTypeCheck = pickSupportedMimeType();
+  if (!window.MediaRecorder || !navigator.mediaDevices || !mimeTypeCheck) {
+    status.textContent = "This browser doesn't support live camera recording -- try Chrome or Firefox.";
+    return;
+  }
+
+  const formData = new FormData();
+  const taalValue = document.getElementById("taal-input").value;
+  const samTimeValue = document.getElementById("sam-time-input").value;
+  if (taalValue) formData.append("taal", taalValue);
+  if (samTimeValue) formData.append("sam_time", samTimeValue);
+  const expectedMudrasValue = document.getElementById("expected-mudras-input").value;
+  if (expectedMudrasValue.trim()) formData.append("expected_mudras", expectedMudrasValue);
+
+  status.textContent = "Starting live session...";
+  let startResp;
+  try {
+    startResp = await fetch("/live/start", { method: "POST", body: formData });
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+    return;
+  }
+  const startData = await startResp.json();
+  if (!startResp.ok) {
+    status.textContent = `Error: ${startData.error || "could not start live session"}`;
+    return;
+  }
+  liveSessionId = startData.session_id;
+
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  } catch (err) {
+    status.textContent = `Camera/mic access failed: ${err.message}`;
+    liveSessionId = null;
+    return;
+  }
+
+  document.getElementById("live-preview").srcObject = liveStream;
+  status.textContent = "";
+  document.getElementById("live-start-btn").classList.add("hidden");
+  document.getElementById("live-capture").classList.remove("hidden");
+
+  showLiveResultsShell();
+
+  liveRunning = true;
+  liveRecordLoop();
+}
+
+async function stopLive() {
+  liveRunning = false;
+  if (liveStream) {
+    liveStream.getTracks().forEach(t => t.stop());
+    liveStream = null;
+  }
+  document.getElementById("live-capture").classList.add("hidden");
+  document.getElementById("live-start-btn").classList.remove("hidden");
+
+  if (liveSessionId) {
+    const sessionId = liveSessionId;
+    liveSessionId = null;
+    try {
+      const resp = await fetch(`/live/stop?session_id=${encodeURIComponent(sessionId)}`, { method: "POST" });
+      const data = await resp.json();
+      if (resp.ok) renderResults(data);
+    } catch (err) {
+      // Best-effort -- the tab is already showing the last live tick's results.
+    }
+  }
+}
+
+document.getElementById("live-start-btn").addEventListener("click", startLive);
+document.getElementById("live-stop-btn").addEventListener("click", stopLive);
+
+window.addEventListener("beforeunload", () => {
+  if (liveSessionId) {
+    navigator.sendBeacon(`/live/stop?session_id=${encodeURIComponent(liveSessionId)}`);
+  }
+});

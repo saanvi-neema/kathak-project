@@ -14,7 +14,8 @@
         <li class="tab active" data-tab="overview">Overview</li>
         <li class="tab" data-tab="pose">Pose View</li>
         <li class="tab" data-tab="mudra">Mudra Analysis</li>
-        <li class="tab" data-tab="tatkaar">Tatkaar Analysis</li>
+        <li class="tab" data-tab="timing">Movement Analysis</li>
+        <li class="tab" data-tab="tatkaar">Tatkaar Analysis<span class="badge">unvalidated</span></li>
         <li class="tab" data-tab="chakkar">Chakkar Analysis</li>
         <li class="tab" data-tab="abhinaya">Abhinaya (Rasa)<span class="badge">unvalidated</span></li>
         <li class="tab" data-tab="comparison">Comparison<span class="badge">preview</span></li>
@@ -30,6 +31,13 @@
           <input type="file" id="video-input" name="video" accept="video/*" required>
           <button type="submit">Analyze</button>
         </form>
+
+        <div class="live-divider"><span>or</span></div>
+        <div class="live-start">
+          <button type="button" id="live-start-btn">Go Live</button>
+          <p class="subtext">Perform in front of your camera and get feedback as you go (uses the taal/sam and expected mudra fields below too, if filled in).</p>
+        </div>
+
         <details class="taal-details">
           <summary>Taal / sam (optional) -- checks chakkar landings against the taal cycle</summary>
           <p class="subtext">Neither is auto-detected -- if you know the taal and can tell where the first sam falls in the video, this checks whether your chakkars land clean on sam. Leave blank to skip.</p>
@@ -59,6 +67,15 @@
         <div id="status" class="status"></div>
       </section>
 
+      <div id="live-capture" class="hidden">
+        <video id="live-preview" autoplay muted playsinline></video>
+        <div class="live-controls">
+          <span class="live-indicator">&#9679; recording</span>
+          <button type="button" id="live-stop-btn">Stop</button>
+        </div>
+        <div id="live-status" class="status"></div>
+      </div>
+
       <section id="results" class="hidden">
         <div id="tab-overview" class="tab-panel">
           <h2>Overview</h2>
@@ -80,8 +97,14 @@
           <div id="mudra-content"></div>
         </div>
 
+        <div id="tab-timing" class="tab-panel hidden">
+          <h2>Movement Analysis</h2>
+          <div id="timing-content"></div>
+        </div>
+
         <div id="tab-tatkaar" class="tab-panel hidden">
           <h2>Tatkaar Analysis</h2>
+          <p class="subtext" id="tatkaar-note"></p>
           <div id="tatkaar-content"></div>
         </div>
 

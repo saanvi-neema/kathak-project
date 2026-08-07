@@ -9,3 +9,5 @@ __pycache__/
 app/uploads/
 .pytest_cache/
 data/mudra_training/
+review_claude.md
+review_codex.md

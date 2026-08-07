@@ -19,6 +19,8 @@ from werkzeug.utils import secure_filename
 
 from pipeline import analyze_video, run_comparison
 from taal_reference import TAAL_DEFINITIONS  # noqa: E402 -- scripts/ is already on sys.path via pipeline's import
+from live_session import LiveSession, LIVE_SESSIONS, _cleanup_idle_live_sessions
+from live_pipeline import process_live_chunk, current_snapshot
 
 APP_DIR = os.path.dirname(__file__)
 UPLOAD_DIR = os.path.join(APP_DIR, "uploads")
@@ -160,6 +162,103 @@ def compare():
 
     results["session_id"] = session_id
     return jsonify(serialize_results(results))
+
+
+@app.route("/live/start", methods=["POST"])
+def live_start():
+    """
+    Allocates a live capture session -- mirrors /analyze's optional
+    taal/sam_time/expected_mudras fields and uuid session-id pattern, but
+    keeps state in LIVE_SESSIONS (persistent landmarkers, rolling buffers)
+    instead of writing an uploaded file. See app/live_session.py.
+    """
+    _cleanup_old_sessions()
+    _cleanup_idle_live_sessions()
+
+    taal_name = request.form.get("taal") or None
+    if taal_name is not None and taal_name not in TAAL_DEFINITIONS:
+        return jsonify({"error": f"Unknown taal '{taal_name}'."}), 400
+    sam_time_raw = request.form.get("sam_time")
+    sam_time = None
+    if sam_time_raw:
+        try:
+            sam_time = float(sam_time_raw)
+        except ValueError:
+            return jsonify({"error": "Sam time must be a number (seconds)."}), 400
+
+    expected_mudras_raw = request.form.get("expected_mudras", "")
+    expected_mudra_sequence = [
+        name.strip().lower()
+        for name in expected_mudras_raw.replace(",", "\n").splitlines()
+        if name.strip()
+    ] or None
+
+    session_id = uuid.uuid4().hex[:12]
+    session_dir = os.path.join(UPLOAD_DIR, session_id)
+    session = LiveSession(
+        session_id, session_dir, taal_name=taal_name, sam_time=sam_time,
+        expected_mudra_sequence=expected_mudra_sequence,
+    )
+    LIVE_SESSIONS[session_id] = session
+    return jsonify({"session_id": session_id})
+
+
+@app.route("/live/chunk", methods=["POST"])
+def live_chunk():
+    """
+    Accepts one recorded chunk (raw bytes in the request body, same as the
+    live-capture spike that validated this approach) and returns a full
+    results snapshot -- see live_pipeline.process_live_chunk.
+    """
+    _cleanup_idle_live_sessions()
+
+    session_id = request.args.get("session_id", "")
+    if not SESSION_ID_RE.match(session_id):
+        return jsonify({"error": "Invalid session id."}), 404
+    session = LIVE_SESSIONS.get(session_id)
+    if session is None:
+        return jsonify({"error": "Unknown or expired live session."}), 404
+
+    ext = request.args.get("ext", "webm")
+    if ext not in {"webm", "mp4"}:
+        return jsonify({"error": "Unsupported chunk container."}), 400
+    try:
+        duration_sec = float(request.args.get("duration_sec"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "duration_sec is required and must be a number."}), 400
+
+    chunk_bytes = request.get_data()
+    if not chunk_bytes:
+        return jsonify({"error": "No chunk data received."}), 400
+
+    with session.lock:
+        try:
+            snapshot = process_live_chunk(session, chunk_bytes, ext, duration_sec)
+        except Exception:
+            app.logger.exception("Live chunk processing failed for session %s", session_id)
+            return jsonify({"error": "Live chunk processing failed -- check the server log for details."}), 500
+        session.touch()
+
+    snapshot["session_id"] = session_id
+    return jsonify(serialize_results(snapshot))
+
+
+@app.route("/live/stop", methods=["POST"])
+def live_stop():
+    session_id = request.args.get("session_id", "") or request.form.get("session_id", "")
+    if not SESSION_ID_RE.match(session_id):
+        return jsonify({"error": "Invalid session id."}), 404
+    session = LIVE_SESSIONS.pop(session_id, None)
+    if session is None:
+        return jsonify({"error": "Unknown or expired live session."}), 404
+
+    with session.lock:
+        snapshot = current_snapshot(session)
+        session.close()
+    shutil.rmtree(session.work_dir, ignore_errors=True)
+
+    snapshot["session_id"] = session_id
+    return jsonify(serialize_results(snapshot))
 
 
 SESSION_ID_RE = re.compile(r"^[0-9a-f]{12}$")  # matches uuid.uuid4().hex[:12], the only format /analyze and /compare ever generate
