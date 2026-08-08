@@ -9,7 +9,7 @@ directly -- same approach as test_beat_sync_check.py's synthetic controls.
 import numpy as np
 import pytest
 
-from comparison import cluster_onsets, compare_performances, find_dense_stretches
+from comparison import align_envelopes, cluster_onsets, compare_performances, find_dense_stretches
 
 
 def make_envelope(onset_times, duration, hop_sec=0.02, sigma=0.03):
@@ -192,3 +192,32 @@ def test_tempo_shifted_student_still_aligns():
     # mapped student time should land near the actual stretched onset, not the raw teacher time
     for action in result["actions"]:
         assert abs(action["student_time"] - action["teacher_time"] * stretch) < 0.5
+
+
+def test_align_envelopes_returns_empty_path_for_empty_input_instead_of_crashing():
+    """np.max() on an empty array raises ValueError -- align_envelopes must
+    special-case this rather than let it bubble up (see
+    test_whole_clip_as_one_dense_stretch_does_not_crash for the real
+    end-to-end scenario that reaches this)."""
+    assert align_envelopes(np.array([]), np.array([1.0, 2.0])) == []
+    assert align_envelopes(np.array([1.0, 2.0]), np.array([])) == []
+    assert align_envelopes(np.array([]), np.array([])) == []
+
+
+def test_whole_clip_as_one_dense_stretch_does_not_crash():
+    """Real bug found and fixed: a footwork-drill-style clip that's entirely
+    one sustained tatkaar phrase (a realistic input for this project's
+    tatkaar feature) removes every envelope sample before alignment
+    (_remove_dense_regions), leaving align_envelopes() nothing to work with.
+    Before the fix this raised an unhandled ValueError instead of producing
+    a graceful dense-stretch-only comparison."""
+    teacher_onsets = list(np.arange(20) * 0.3)  # one long dense run, nothing sparse
+    student_onsets = list(np.arange(20) * 0.3)
+    teacher_env, t_times = make_envelope(teacher_onsets, 7.0)
+    student_env, s_times = make_envelope(student_onsets, 7.0)
+
+    result = compare_performances(teacher_env, t_times, teacher_onsets, student_env, s_times, student_onsets)
+
+    assert result["actions"] == []
+    assert len(result["dense_sections"]) == 1
+    assert result["dense_sections"][0]["match"] is True

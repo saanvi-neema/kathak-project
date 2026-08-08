@@ -187,6 +187,15 @@ def align_envelopes(teacher_env, student_env, time_weight=TIME_FEATURE_WEIGHT):
     """
     t = np.asarray(teacher_env, dtype=float)
     s = np.asarray(student_env, dtype=float)
+    if len(t) == 0 or len(s) == 0:
+        # Nothing left to align -- e.g. a whole clip (or its only audible
+        # portion) was one sustained dense/tatkaar stretch, so
+        # compare_performances() removed every envelope sample before this
+        # was ever called (see _remove_dense_regions). np.max() on an empty
+        # array raises ValueError; the caller's teacher/student "sparse"
+        # onset lists are empty in exactly this situation too, so
+        # compare_actions() never actually dereferences this empty path.
+        return []
     t_norm = t / (np.max(t) or 1.0)
     s_norm = s / (np.max(s) or 1.0)
     t_pos = np.linspace(0, 1, len(t))

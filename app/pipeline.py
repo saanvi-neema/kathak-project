@@ -739,9 +739,15 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
     features_csv = extract_features(landmarks_csv, output_dir=work_dir)
 
     chakkar = run_chakkar_analysis(landmarks_csv)
-    timing = run_timing_analysis(video_path, features_csv, duration_sec)
+    # Extracted once and shared with run_taal_analysis below -- both need the
+    # same audio decode + tempo/beat detection over this video, and
+    # run_timing_analysis always needs it regardless of whether taal analysis
+    # ends up running at all, so there's no cost added by extracting it here
+    # up front instead of inside run_timing_analysis.
+    beat_grid = _extract_beat_grid(video_path, duration_sec)
+    timing = run_timing_analysis(video_path, features_csv, duration_sec, beat_grid=beat_grid)
     mudra_events = run_mudra_analysis(landmarks_csv, expected_sequence=expected_mudra_sequence)
-    taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time)
+    taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time, beat_grid=beat_grid)
     rasa_events = run_rasa_analysis(landmarks_csv)
     tatkaar = run_tatkaar_analysis(video_path, work_dir)
 

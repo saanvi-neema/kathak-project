@@ -226,12 +226,28 @@ def live_chunk():
         duration_sec = float(request.args.get("duration_sec"))
     except (TypeError, ValueError):
         return jsonify({"error": "duration_sec is required and must be a number."}), 400
+    # The browser cycles ~1.5s chunks (see app.js's LIVE_CHUNK_MS) -- a wildly
+    # implausible value (clock drift on a throttled/backgrounded mobile tab,
+    # or a buggy client) would silently corrupt live_pipeline's effective-fps
+    # math and the finalize-margin invariant it depends on, rather than fail
+    # loudly. 10s is a generous ceiling, not the expected value.
+    if not (0 < duration_sec <= 10.0):
+        return jsonify({"error": "duration_sec out of expected range (0, 10] seconds."}), 400
 
     chunk_bytes = request.get_data()
     if not chunk_bytes:
         return jsonify({"error": "No chunk data received."}), 400
 
     with session.lock:
+        # Re-check the session is still live now that the lock is held --
+        # /live/stop or the idle sweep could have popped and closed it (its
+        # own close() + rmtree also run under this same lock) while this
+        # request was queued waiting for the lock, in which case `session`
+        # here is a stale reference to already-closed landmarkers/a deleted
+        # work_dir. Only matters under real request concurrency (the current
+        # dev server is single-threaded), but cheap to guard regardless.
+        if LIVE_SESSIONS.get(session_id) is not session:
+            return jsonify({"error": "Unknown or expired live session."}), 404
         try:
             snapshot = process_live_chunk(session, chunk_bytes, ext, duration_sec)
         except Exception:

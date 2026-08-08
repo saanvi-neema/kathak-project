@@ -113,6 +113,28 @@ def test_live_chunk_missing_duration_sec_is_rejected(monkeypatch):
     assert resp.status_code == 400
 
 
+def test_live_chunk_out_of_range_duration_sec_is_rejected(monkeypatch):
+    """Real bug found and fixed: an unchecked client-supplied duration_sec
+    (clock drift on a throttled/backgrounded mobile tab, or a buggy client)
+    would silently corrupt live_pipeline's effective-fps math and the
+    finalize-margin invariant it depends on, rather than fail loudly."""
+    monkeypatch.setattr(server, "LiveSession", FakeLiveSession)
+    client = _client()
+    session_id = client.post("/live/start").get_json()["session_id"]
+    for bad_duration in ["0", "-1.5", "10.01", "999"]:
+        resp = client.post(f"/live/chunk?session_id={session_id}&ext=webm&duration_sec={bad_duration}", data=b"x")
+        assert resp.status_code == 400, f"duration_sec={bad_duration} should have been rejected"
+
+
+def test_live_chunk_boundary_duration_sec_is_accepted(monkeypatch):
+    monkeypatch.setattr(server, "LiveSession", FakeLiveSession)
+    monkeypatch.setattr(server, "process_live_chunk", lambda session, chunk_bytes, ext, duration_sec: dict(FAKE_SNAPSHOT))
+    client = _client()
+    session_id = client.post("/live/start").get_json()["session_id"]
+    resp = client.post(f"/live/chunk?session_id={session_id}&ext=webm&duration_sec=10.0", data=b"x")
+    assert resp.status_code == 200
+
+
 def test_live_chunk_unsupported_ext_is_rejected(monkeypatch):
     monkeypatch.setattr(server, "LiveSession", FakeLiveSession)
     client = _client()
@@ -187,3 +209,38 @@ def test_live_stop_evicts_session_and_returns_snapshot(monkeypatch):
 def test_live_stop_unknown_session_returns_404():
     resp = _client().post("/live/stop?session_id=0123456789ab")
     assert resp.status_code == 404
+
+
+def test_live_chunk_rejects_a_session_removed_while_waiting_for_the_lock(monkeypatch):
+    """
+    Hardens against a real (if currently dormant under the single-threaded
+    dev server) race: /live/chunk looks up the session, then blocks on its
+    lock -- if /live/stop or the idle sweep pops and closes that same
+    session while this request is waiting for the lock, `session` here is a
+    stale reference to already-closed landmarkers / a deleted work_dir.
+    Simulated here with a lock whose __enter__ evicts the session from
+    LIVE_SESSIONS, standing in for a concurrent /live/stop finishing first.
+    """
+    class EvictingLock:
+        def __init__(self, session_id):
+            self.session_id = session_id
+
+        def __enter__(self):
+            live_session.LIVE_SESSIONS.pop(self.session_id, None)
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(server, "LiveSession", FakeLiveSession)
+    client = _client()
+    session_id = client.post("/live/start").get_json()["session_id"]
+    server.LIVE_SESSIONS[session_id].lock = EvictingLock(session_id)
+
+    called = {"count": 0}
+    monkeypatch.setattr(server, "process_live_chunk", lambda *a, **kw: called.update(count=called["count"] + 1))
+
+    resp = client.post(f"/live/chunk?session_id={session_id}&ext=webm&duration_sec=1.5", data=b"x")
+
+    assert resp.status_code == 404
+    assert called["count"] == 0, "process_live_chunk must not run against a session evicted mid-request"

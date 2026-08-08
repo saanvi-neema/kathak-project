@@ -11,12 +11,21 @@ import time
 import live_session
 
 
+class _NullLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 class FakeSession:
     def __init__(self, last_activity, created_at, work_dir):
         self.last_activity = last_activity
         self.created_at = created_at
         self.work_dir = work_dir
         self.closed = False
+        self.lock = _NullLock()
 
     def is_idle(self, now=None):
         now = now if now is not None else time.time()

@@ -188,7 +188,14 @@ def compute_hand_features(df, feat):
             # straight/extended, smaller = curled.
             pip_angle = angle_at(mcp_xy, pip_xy, dip_xy)
             feat[f"hand_{side}_{finger}_curl_angle"] = pip_angle
-            feat[f"hand_{side}_{finger}_extended"] = pip_angle > 160
+            # `pip_angle > 160` on a NaN (untracked landmark, e.g. motion
+            # blur/occlusion during a fast gesture) evaluates to plain False,
+            # not NaN -- silently reporting "curled" for a frame with no real
+            # data instead of leaving it missing. np.where keeps genuinely
+            # untracked frames as NaN so a window average (see
+            # app/pipeline.py's run_mudra_analysis) correctly skips them
+            # instead of having them vote "curled" by default.
+            feat[f"hand_{side}_{finger}_extended"] = np.where(np.isnan(pip_angle), np.nan, pip_angle > 160)
 
             feat[f"hand_{side}_{finger}_tip_to_wrist"] = np.linalg.norm(tip_xy - wrist, axis=-1)
 

@@ -27,6 +27,12 @@ tabs.forEach(tab => {
   });
 });
 
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 function scoreClass(value) {
   if (value === null || value === undefined) return "";
   if (value >= 85) return "good";
@@ -202,7 +208,7 @@ function tempoCircleCard(bpm) {
   const hasValue = bpm !== null && bpm !== undefined && !Number.isNaN(bpm);
   return `
     <div class="score-card score-card-circular">
-      <div class="label">Tatkaar Tempo</div>
+      <div class="label">Tempo</div>
       <div class="circle-badge ${hasValue ? "" : "circle-badge-empty"}">
         ${hasValue
           ? `<span class="circle-value">${Math.round(bpm)}</span><span class="circle-unit">BPM</span>`
@@ -336,7 +342,7 @@ function renderMudra(mudra) {
         ? e.mismatches.join("; ")
         : "matches the reference shape";
     const expectedText = e.expected_mudra
-      ? ` &mdash; expected <strong>${e.expected_mudra}</strong> (${e.matches_expected ? "correct" : "mismatch"})`
+      ? ` &mdash; expected <strong>${escapeHtml(e.expected_mudra)}</strong> (${e.matches_expected ? "correct" : "mismatch"})`
       : "";
     return `<div class="${cls}">
       ${formatTime(e.start_sec)}&ndash;${formatTime(e.end_sec)} (${e.hand_side} hand): <strong>${e.mudra}</strong>
@@ -506,6 +512,7 @@ function renderReports(lines) {
 let liveSessionId = null;
 let liveStream = null;
 let liveRunning = false;
+let liveStarting = false;
 const LIVE_CHUNK_MS = 1500;
 
 function pickSupportedMimeType() {
@@ -550,6 +557,7 @@ async function liveRecordLoop() {
         { method: "POST", headers: { "Content-Type": blob.type || "application/octet-stream" }, body: blob }
       );
       const data = await resp.json();
+      if (!liveRunning) break;  // stopLive() may have already torn down the session while this request was in flight
       if (!resp.ok) {
         liveStatus.textContent = `Error: ${data.error || "live chunk failed"}`;
         continue;
@@ -574,53 +582,65 @@ function showLiveResultsShell() {
 }
 
 async function startLive() {
-  const status = document.getElementById("status");
-  const mimeTypeCheck = pickSupportedMimeType();
-  if (!window.MediaRecorder || !navigator.mediaDevices || !mimeTypeCheck) {
-    status.textContent = "This browser doesn't support live camera recording -- try Chrome or Firefox.";
-    return;
-  }
-
-  const formData = new FormData();
-  const taalValue = document.getElementById("taal-input").value;
-  const samTimeValue = document.getElementById("sam-time-input").value;
-  if (taalValue) formData.append("taal", taalValue);
-  if (samTimeValue) formData.append("sam_time", samTimeValue);
-  const expectedMudrasValue = document.getElementById("expected-mudras-input").value;
-  if (expectedMudrasValue.trim()) formData.append("expected_mudras", expectedMudrasValue);
-
-  status.textContent = "Starting live session...";
-  let startResp;
+  if (liveStarting || liveRunning) return;  // guards against a double-click firing two sessions/getUserMedia grants
+  liveStarting = true;
   try {
-    startResp = await fetch("/live/start", { method: "POST", body: formData });
-  } catch (err) {
-    status.textContent = `Error: ${err.message}`;
-    return;
+    const status = document.getElementById("status");
+    const mimeTypeCheck = pickSupportedMimeType();
+    if (!window.MediaRecorder || !navigator.mediaDevices || !mimeTypeCheck) {
+      status.textContent = "This browser doesn't support live camera recording -- try Chrome or Firefox.";
+      return;
+    }
+
+    const formData = new FormData();
+    const taalValue = document.getElementById("taal-input").value;
+    const samTimeValue = document.getElementById("sam-time-input").value;
+    if (taalValue) formData.append("taal", taalValue);
+    if (samTimeValue) formData.append("sam_time", samTimeValue);
+    const expectedMudrasValue = document.getElementById("expected-mudras-input").value;
+    if (expectedMudrasValue.trim()) formData.append("expected_mudras", expectedMudrasValue);
+
+    status.textContent = "Starting live session...";
+    let startResp;
+    try {
+      startResp = await fetch("/live/start", { method: "POST", body: formData });
+    } catch (err) {
+      status.textContent = `Error: ${err.message}`;
+      return;
+    }
+    const startData = await startResp.json();
+    if (!startResp.ok) {
+      status.textContent = `Error: ${startData.error || "could not start live session"}`;
+      return;
+    }
+    liveSessionId = startData.session_id;
+
+    try {
+      liveStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (err) {
+      status.textContent = `Camera/mic access failed: ${err.message}`;
+      // The server-side session (landmarkers + mudra model already loaded) was
+      // created successfully above -- without this it would sit alive until
+      // the 5-minute idle sweep reaps it, for no reason since there's no
+      // camera to ever send it a chunk.
+      const orphanedSessionId = liveSessionId;
+      liveSessionId = null;
+      fetch(`/live/stop?session_id=${encodeURIComponent(orphanedSessionId)}`, { method: "POST" }).catch(() => {});
+      return;
+    }
+
+    document.getElementById("live-preview").srcObject = liveStream;
+    status.textContent = "";
+    document.getElementById("live-start-btn").classList.add("hidden");
+    document.getElementById("live-capture").classList.remove("hidden");
+
+    showLiveResultsShell();
+
+    liveRunning = true;
+    liveRecordLoop();
+  } finally {
+    liveStarting = false;
   }
-  const startData = await startResp.json();
-  if (!startResp.ok) {
-    status.textContent = `Error: ${startData.error || "could not start live session"}`;
-    return;
-  }
-  liveSessionId = startData.session_id;
-
-  try {
-    liveStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  } catch (err) {
-    status.textContent = `Camera/mic access failed: ${err.message}`;
-    liveSessionId = null;
-    return;
-  }
-
-  document.getElementById("live-preview").srcObject = liveStream;
-  status.textContent = "";
-  document.getElementById("live-start-btn").classList.add("hidden");
-  document.getElementById("live-capture").classList.remove("hidden");
-
-  showLiveResultsShell();
-
-  liveRunning = true;
-  liveRecordLoop();
 }
 
 async function stopLive() {

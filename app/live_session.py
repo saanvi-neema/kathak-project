@@ -117,5 +117,9 @@ def _cleanup_idle_live_sessions():
     stale_ids = [sid for sid, session in LIVE_SESSIONS.items() if session.is_idle(now)]
     for sid in stale_ids:
         session = LIVE_SESSIONS.pop(sid)
-        session.close()
+        # Same lock /live/stop closes a session under -- a /live/chunk
+        # request already holding this lock (mid-process_live_chunk) must
+        # finish before this sweep closes the landmarkers out from under it.
+        with session.lock:
+            session.close()
         shutil.rmtree(session.work_dir, ignore_errors=True)
