@@ -149,7 +149,23 @@ def extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, f
     # Hand landmarks (21 keypoints per hand)
     if hand_result.hand_landmarks and hand_result.handedness:
         for hand_lm, handedness in zip(hand_result.hand_landmarks, hand_result.handedness):
-            hand_label = handedness[0].category_name.lower()  # "left" or "right"
+            # MediaPipe's handedness classifier assumes a mirrored/selfie-
+            # style input image and is documented as needing the output
+            # swapped otherwise. Every real source this app captures from is
+            # non-mirrored: phone camera apps save the corrected (non-
+            # mirrored) file by default even from the front camera (only an
+            # explicit "mirror front camera" setting changes that), and the
+            # browser's getUserMedia/MediaRecorder in live mode captures the
+            # raw, unmirrored sensor feed regardless of any CSS mirroring
+            # applied to the on-screen preview for the dancer's convenience.
+            # So the raw classification is flipped here rather than trusted
+            # as-is. This only affects the hand_side label attached to a
+            # detected mudra event (which physical hand gets reported) --
+            # predict_mudra() strips this prefix before scoring (see
+            # app/pipeline.py's run_mudra_analysis), so mudra
+            # identification/scoring itself is completely unaffected.
+            raw_label = handedness[0].category_name.lower()  # "left" or "right", per MediaPipe's mirrored convention
+            hand_label = "right" if raw_label == "left" else "left"
             for j, p in enumerate(hand_lm):
                 row[f"hand_{hand_label}_{j}_x"] = round(p.x, 6)
                 row[f"hand_{hand_label}_{j}_y"] = round(p.y, 6)

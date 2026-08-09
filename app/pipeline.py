@@ -323,15 +323,25 @@ def _flags_from_ending(duration_sec, beat_times):
     )]
 
 
-def run_timing_analysis(video_path, features_csv, duration_sec, beat_grid=None):
+def run_timing_analysis(features_csv, duration_sec, beat_grid):
     """
-    beat_grid: pass a precomputed (tempo_bpm, beat_times) tuple (e.g. from
-    _beat_grid_from_audio) to skip re-extracting audio from video_path -- a
-    live capture session already has its rolling audio buffer in memory.
-    Falls back to the normal video_path-based extraction if not supplied.
+    beat_grid: a precomputed (tempo_bpm, beat_times) tuple, or None if
+    extraction found no usable audio signal -- both callers (analyze_video's
+    batch path, live_pipeline's live path) always compute this themselves
+    and pass it explicitly, sharing one extraction with run_taal_analysis
+    rather than each independently re-extracting audio from video_path.
+
+    Real bug found and fixed: this used to accept beat_grid=None as "not
+    supplied, extract it yourself from video_path" and fall back to
+    _extract_beat_grid internally. Once analyze_video() started always
+    computing and passing an explicit value (including an explicit None
+    when extraction genuinely fails), that fallback could no longer tell
+    "the caller didn't pass anything" apart from "the caller already tried
+    and failed" -- a video with no usable audio silently re-ran the full
+    ffmpeg+librosa extraction here (and again in run_taal_analysis) instead
+    of just accepting the already-known failure. Removed entirely: this
+    parameter is now required and authoritative, not a maybe-hint.
     """
-    if beat_grid is None:
-        beat_grid = _extract_beat_grid(video_path, duration_sec)
     if beat_grid is None:
         return None
     tempo_bpm, beat_times = beat_grid
@@ -390,7 +400,7 @@ def _taal_flags_from_chakkar(chakkar_events, beat_times, taal_name, sam_time):
     return events, flags
 
 
-def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time, beat_grid=None):
+def run_taal_analysis(duration_sec, chakkar, taal_name, sam_time, beat_grid):
     """
     Checks chakkar landings against sam using the real taal cycle structure
     (taal_reference.py). Requires taal_name + sam_time to be supplied --
@@ -398,9 +408,9 @@ def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time, be
     why). Returns None if any of chakkar/taal_name/sam_time are missing, or
     if there isn't enough audio signal for a beat grid.
 
-    beat_grid: pass a precomputed (tempo_bpm, beat_times) tuple to skip
-    re-extracting audio from video_path -- see run_timing_analysis's
-    docstring for why (live capture sessions already hold this in memory).
+    beat_grid: a precomputed (tempo_bpm, beat_times) tuple, or None if
+    extraction found no usable audio signal -- see run_timing_analysis's
+    docstring for why this is required and no longer optional/auto-extracted.
     """
     if not taal_name or sam_time is None or not chakkar or not chakkar.get("events"):
         return None
@@ -409,8 +419,6 @@ def run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time, be
     if taal_name not in TAAL_DEFINITIONS:
         return None
 
-    if beat_grid is None:
-        beat_grid = _extract_beat_grid(video_path, duration_sec)
     if beat_grid is None:
         return None
     _, beat_times = beat_grid
@@ -745,9 +753,9 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
     # ends up running at all, so there's no cost added by extracting it here
     # up front instead of inside run_timing_analysis.
     beat_grid = _extract_beat_grid(video_path, duration_sec)
-    timing = run_timing_analysis(video_path, features_csv, duration_sec, beat_grid=beat_grid)
+    timing = run_timing_analysis(features_csv, duration_sec, beat_grid)
     mudra_events = run_mudra_analysis(landmarks_csv, expected_sequence=expected_mudra_sequence)
-    taal = run_taal_analysis(video_path, duration_sec, chakkar, taal_name, sam_time, beat_grid=beat_grid)
+    taal = run_taal_analysis(duration_sec, chakkar, taal_name, sam_time, beat_grid)
     rasa_events = run_rasa_analysis(landmarks_csv)
     tatkaar = run_tatkaar_analysis(video_path, work_dir)
 

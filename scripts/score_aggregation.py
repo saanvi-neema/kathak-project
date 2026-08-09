@@ -99,13 +99,25 @@ def chakkar_quality_score(score_result, count_gap_threshold=0.05, orientation_th
     if count_gap <= count_gap_threshold:
         count_score = 100.0
     else:
-        count_score = max(0.0, 100 - (count_gap - count_gap_threshold) * 100)
+        # Scaled so a full extra/missing rotation (count_gap == 1.0) costs
+        # the rest of the 100 points, per this function's own docstring.
+        # Real bug found and fixed: the flat "* 100" scale actually zeroed
+        # out around count_gap ~= 1.05, not 1.0 -- a maximal, unambiguous
+        # full-rotation miscount still scored 5/100 instead of 0. Scaling by
+        # the actual remaining range (1.0 - count_gap_threshold) makes the
+        # formula reach exactly 0 at the documented reference point.
+        count_score = max(0.0, 100 - (count_gap - count_gap_threshold) * (100.0 / (1.0 - count_gap_threshold)))
 
     orientation_gap = abs(score_result["orientation_gap_deg"])
     if orientation_gap <= orientation_threshold_deg:
         orientation_score = 100.0
     else:
-        orientation_score = max(0.0, 100 - (orientation_gap - orientation_threshold_deg) / 1.8)
+        # Same fix as count_score above: scaled by the actual remaining
+        # range (180 - orientation_threshold_deg) so a full 180-degree
+        # orientation error scores exactly 0, matching the docstring. The
+        # flat "/ 1.8" divisor only reached ~8.3/100 at 180 degrees, not 0.
+        orientation_score = max(0.0, 100 - (orientation_gap - orientation_threshold_deg)
+                                 * (100.0 / (180.0 - orientation_threshold_deg)))
 
     stop_score = 100.0 if score_result["controlled_stop"] else uncontrolled_stop_penalty_score
     return float(np.mean([count_score, orientation_score, stop_score]))

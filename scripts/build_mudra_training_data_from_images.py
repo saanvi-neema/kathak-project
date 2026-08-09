@@ -113,7 +113,16 @@ def extract_one_image(landmarker, image_path):
     if not result.hand_landmarks or not result.handedness:
         return None, None
 
-    side = result.handedness[0][0].category_name.lower()
+    # MediaPipe's handedness classifier assumes a mirrored/selfie-style
+    # input image (see extract_landmarks.py's extract_frame_landmarks, fixed
+    # for the same reason). These are ordinary reference photos, not phone
+    # selfies -- flipped here for consistency with the video pipeline's
+    # hand_side convention, though unlike the video case (directly confirmed
+    # non-mirrored) this is by analogy, not independently verified for this
+    # specific photo source. Inert either way for classifier accuracy:
+    # mudra_classifier.py strips the hand_{side}_ prefix before training.
+    raw_side = result.handedness[0][0].category_name.lower()
+    side = "right" if raw_side == "left" else "left"
     points = {i: (p.x, p.y) for i, p in enumerate(result.hand_landmarks[0])}
     return side, points
 

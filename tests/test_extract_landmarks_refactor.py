@@ -74,6 +74,9 @@ def _blank_frame():
 def test_extract_frame_landmarks_row_shape_with_full_detections():
     pose_landmarks = [FakeLandmark(x=i * 0.01, y=i * 0.01, visibility=1.0) for i in range(33)]
     pose = FakeLandmarker(FakePoseResult(pose_landmarks))
+    # MediaPipe's raw handedness classification is flipped (see
+    # extract_frame_landmarks) since this app's real capture sources are
+    # non-mirrored -- a raw "Right" call lands in the hand_left_* columns.
     hand = FakeLandmarker(FakeHandResult([("Right", [FakeLandmark(x=0.1, y=0.2) for _ in range(21)])]))
     face = FakeLandmarker(FakeFaceResult([FakeBlendshape("mouthSmileLeft", 0.42)]))
 
@@ -83,8 +86,32 @@ def test_extract_frame_landmarks_row_shape_with_full_detections():
     assert row["timestamp_ms"] == 233
     assert row["body_nose_x"] == 0.0
     assert row["body_left_shoulder_vis"] == 1.0
-    assert row["hand_right_0_x"] == 0.1
+    assert row["hand_left_0_x"] == 0.1
     assert row["face_mouthSmileLeft"] == 0.42
+
+
+def test_extract_frame_landmarks_flips_mediapipe_raw_handedness():
+    """
+    Real bug found and fixed: MediaPipe's handedness classifier assumes a
+    mirrored/selfie-style input image, but every real source this app
+    captures from is non-mirrored (phone camera apps save the corrected,
+    non-mirrored file by default even from the front camera; the browser's
+    getUserMedia/MediaRecorder in live mode captures the raw sensor feed
+    regardless of any on-screen preview mirroring). So the raw
+    classification must be swapped, not trusted as-is.
+    """
+    pose = FakeLandmarker(FakePoseResult([FakeLandmark(visibility=1.0) for _ in range(33)]))
+    face = FakeLandmarker(FakeFaceResult(None))
+
+    hand = FakeLandmarker(FakeHandResult([("Left", [FakeLandmark(x=0.9) for _ in range(21)])]))
+    row = extract_frame_landmarks(pose, hand, face, _blank_frame(), frame_idx=0, ts_ms=0)
+    assert row["hand_right_0_x"] == 0.9
+    assert "hand_left_0_x" not in row
+
+    hand = FakeLandmarker(FakeHandResult([("Right", [FakeLandmark(x=0.9) for _ in range(21)])]))
+    row = extract_frame_landmarks(pose, hand, face, _blank_frame(), frame_idx=0, ts_ms=0)
+    assert row["hand_left_0_x"] == 0.9
+    assert "hand_right_0_x" not in row
 
 
 def test_extract_frame_landmarks_low_visibility_body_point_is_none():

@@ -44,6 +44,26 @@ def test_deviation_past_threshold_costs_points():
     assert score > 0.0
 
 
+def test_full_orientation_reversal_scores_zero_on_that_subscore():
+    """Real bug found and fixed: the docstring explicitly says a full 180
+    degree orientation error should cost the rest of the 100 points, but
+    the old formula (a flat /1.8 divisor) only reached ~8.3/100 at 180
+    degrees -- a maximal, unambiguous orientation error still scored well
+    above zero on this sub-score."""
+    result = make_chakkar_result(count_gap=0.0, orientation_gap_deg=180.0, controlled_stop=True)
+    score = chakkar_quality_score(result)
+    # mean of (count_score=100, orientation_score=0, stop_score=100)
+    assert score == pytest.approx(200.0 / 3.0)
+
+
+def test_full_extra_rotation_scores_zero_on_that_subscore():
+    """Same fix, the count-gap side: a full extra/missing rotation
+    (count_gap == 1.0) should cost the rest of the 100 points too."""
+    result = make_chakkar_result(count_gap=1.0, orientation_gap_deg=0.0, controlled_stop=True)
+    score = chakkar_quality_score(result)
+    assert score == pytest.approx(200.0 / 3.0)
+
+
 def test_uncontrolled_stop_costs_points_even_with_perfect_count():
     clean = make_chakkar_result(count_gap=0.0, orientation_gap_deg=0.0, controlled_stop=True)
     abrupt = make_chakkar_result(count_gap=0.0, orientation_gap_deg=0.0, controlled_stop=False)

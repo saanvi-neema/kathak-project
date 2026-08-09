@@ -96,7 +96,13 @@ def extract_one_image(landmarker, image_path):
     result = landmarker.detect(mp_image)
     if not result.hand_landmarks or not result.handedness:
         return None, None
-    side = result.handedness[0][0].category_name.lower()
+    # See build_mudra_training_data_from_images.py's extract_one_image for
+    # why this is flipped (MediaPipe's handedness assumes mirrored/selfie
+    # input; extract_landmarks.py's video pipeline was fixed for the same
+    # reason). Inert either way for classifier accuracy: mudra_classifier.py
+    # strips the hand_{side}_ prefix before training.
+    raw_side = result.handedness[0][0].category_name.lower()
+    side = "right" if raw_side == "left" else "left"
     points = {i: (p.x, p.y) for i, p in enumerate(result.hand_landmarks[0])}
     return side, points
 

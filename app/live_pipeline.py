@@ -320,13 +320,10 @@ def process_live_chunk(session, chunk_bytes, ext, chunk_duration_sec):
         beat_grid = _beat_grid_from_audio(session.audio_samples, session.sr, session.duration_sec)
         session.cached_beat_grid = beat_grid
         if beat_grid is not None:
-            # video_path is never used when beat_grid is supplied (see
-            # run_timing_analysis/run_taal_analysis) -- live mode has no
-            # video_path at all, only the in-memory rolling audio buffer.
             features_csv = extract_features(csv_path, output_dir=session.work_dir)
-            session.timing = run_timing_analysis(None, features_csv, session.duration_sec, beat_grid=beat_grid)
+            session.timing = run_timing_analysis(features_csv, session.duration_sec, beat_grid)
             session.taal = run_taal_analysis(
-                None, session.duration_sec, chakkar, session.taal_name, session.sam_time, beat_grid=beat_grid,
+                session.duration_sec, chakkar, session.taal_name, session.sam_time, beat_grid,
             )
         else:
             # Not enough real audio signal accumulated yet -- same "honestly
