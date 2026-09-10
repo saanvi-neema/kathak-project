@@ -5,7 +5,6 @@
 *.wav
 __pycache__/
 *.pyc
-app/uploads/
 .pytest_cache/
 data/mudra_training/model.joblib
 data/mudra_training/external/bharatanatyam_backup_pre_submodule/
