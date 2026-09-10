@@ -1,0 +1,3 @@
+[submodule "data/mudra_training/external/bharatanatyam"]
+	path = data/mudra_training/external/bharatanatyam
+	url = https://github.com/saanvi-neema/Bharatanatyam-Mudra-Dataset.git

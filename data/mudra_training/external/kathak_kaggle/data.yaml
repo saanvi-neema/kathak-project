@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 26
+names: ['Hamsapaksha', 'aral', 'ardhachandra', 'ardhpataka', 'bhramara', 'chandrakala', 'chatur', 'hansaasya', 'kangul', 'kapitth', 'kartarimukh', 'katak', 'mayur', 'mrighasheesh', 'mukul', 'mushti', 'padamkosh', 'pataka', 'sarpsheesh', 'shikhar', 'shuktund', 'sinhamukh', 'soochi', 'tamrachud', 'tripataka', 'trishool']
+
+roboflow:
+  workspace: aniruddha-jmp5a
+  project: kathak-trainer
+  version: 8
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/aniruddha-jmp5a/kathak-trainer/dataset/8
