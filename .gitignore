@@ -2,7 +2,6 @@
 *.mov
 *.mp4
 *.tflite
-*.task
 *.wav
 __pycache__/
 *.pyc
