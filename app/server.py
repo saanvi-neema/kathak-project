@@ -20,7 +20,8 @@ from werkzeug.utils import secure_filename
 from pipeline import analyze_video, run_comparison
 from taal_reference import TAAL_DEFINITIONS  # noqa: E402 -- scripts/ is already on sys.path via pipeline's import
 from live_session import LiveSession, LIVE_SESSIONS, _cleanup_idle_live_sessions
-from live_pipeline import process_live_chunk, current_snapshot
+from live_pipeline import process_live_chunk, current_snapshot, _dbg as _live_dbg
+import haptic
 
 APP_DIR = os.path.dirname(__file__)
 UPLOAD_DIR = os.path.join(APP_DIR, "uploads")
@@ -235,6 +236,7 @@ def live_chunk():
         return jsonify({"error": "duration_sec out of expected range (0, 10] seconds."}), 400
 
     chunk_bytes = request.get_data()
+    _live_dbg(f"chunk={len(chunk_bytes)}b ext={ext} duration={duration_sec:.2f}s")
     if not chunk_bytes:
         return jsonify({"error": "No chunk data received."}), 400
 
@@ -315,7 +317,15 @@ def serialize_results(results):
     return clean(results)
 
 
+@app.route("/test/haptic/<int:finger>")
+def test_haptic(finger):
+    """Test route: buzz one motor by finger index (0=thumb … 4=pinky).
+    e.g. http://localhost:5000/test/haptic/1  buzzes the index finger motor."""
+    ok = haptic.buzz_finger(finger)
+    return jsonify({"finger": finger, "sent": ok})
+
+
 if __name__ == "__main__":
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     _cleanup_old_sessions()
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, use_reloader=False)

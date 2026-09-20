@@ -31,7 +31,7 @@ if SCRIPTS_DIR not in sys.path:
 from extract_landmarks import extract_frame_landmarks  # noqa: E402
 from extract_features import extract_features  # noqa: E402
 from chakkar_scoring import SEGMENT_MERGE_GAP_SEC, SEGMENT_SCORE_PAD_SEC  # noqa: E402
-from build_mudra_training_data import STILL_WINDOW_SEC  # noqa: E402
+from build_mudra_training_data import STILL_WINDOW_SEC, STILL_THRESHOLD  # noqa: E402
 from report_assembly import assemble_report, flags_from_mudra_checks  # noqa: E402
 from score_aggregation import (  # noqa: E402
     mudra_rule_agreement_score, mudra_identification_accuracy_score, overall_score,
@@ -43,12 +43,16 @@ from pipeline import (  # noqa: E402
     RASA_SAMPLE_INTERVAL_SEC,
 )
 from live_session import TIMING_RECOMPUTE_INTERVAL_SEC  # noqa: E402
+import haptic
 
 # Margin before a segment/hold is safe to report as finished, not still
 # growing -- same constants those checks already tune their own edge
 # behavior with, not new numbers invented for live mode.
 CHAKKAR_FINALIZE_MARGIN_SEC = SEGMENT_MERGE_GAP_SEC + SEGMENT_SCORE_PAD_SEC
 MUDRA_FINALIZE_MARGIN_SEC = STILL_WINDOW_SEC
+
+# Haptic threshold: buzz if ongoing mudra rule-agreement score is below this
+HAPTIC_THRESHOLD = 0.85  # temporarily high to test motor fires at 80% score
 
 DEFAULT_CHUNK_FPS_FALLBACK = 30.0  # used only if a chunk's client-reported duration is missing/invalid
 
@@ -99,21 +103,26 @@ def _next_chunk_timestamp_ms(last_ts_ms, effective_fps):
     return last_ts_ms + (1000.0 / effective_fps)
 
 
+FRAME_SUBSAMPLE = 2  # process every Nth frame — mudra is a held pose, full rate not needed
+
 def _extend_landmarks(session, frames, effective_fps):
     session.effective_fps = effective_fps
-    for frame in frames:
+    for i, frame in enumerate(frames):
         ts_ms = _next_chunk_timestamp_ms(session.last_ts, effective_fps)
         ts_ms_int = int(round(ts_ms))
         if ts_ms_int <= session.last_ts:
             ts_ms_int = int(session.last_ts) + 1
         session.last_ts = ts_ms_int
+        session.frame_idx += 1
+
+        if i % FRAME_SUBSAMPLE != 0:
+            continue  # skip MediaPipe inference for this frame; timestamp already advanced
 
         row = extract_frame_landmarks(
             session.pose_landmarker, session.hand_landmarker, session.face_landmarker,
-            frame, session.frame_idx, ts_ms_int,
+            frame, session.frame_idx - 1, ts_ms_int,
         )
         session.landmarks_rows.append(row)
-        session.frame_idx += 1
 
     session.duration_sec = session.last_ts / 1000.0 if session.last_ts >= 0 else 0.0
 
@@ -270,6 +279,36 @@ def current_snapshot(session):
     return _snapshot(session, chakkar=chakkar, mudra=mudra, rasa=rasa)
 
 
+def _haptic_check(mudra_raw, session):
+    """Buzz motor if the current ongoing mudra hold scores below HAPTIC_THRESHOLD."""
+    if not mudra_raw:
+        return
+    ongoing = [
+        e for e in mudra_raw
+        if e["end_sec"] + MUDRA_FINALIZE_MARGIN_SEC > session.duration_sec
+        and e.get("mismatches") is not None
+        and e.get("constraints_checked")
+    ]
+    if not ongoing:
+        return
+    latest = max(ongoing, key=lambda e: e["end_sec"])
+    score = 1.0 - len(latest["mismatches"]) / latest["constraints_checked"]
+    _dbg(f"haptic-check  mudra={latest.get('mudra','?')} score={score:.0%} threshold={HAPTIC_THRESHOLD:.0%} can_buzz={haptic.can_buzz()}")
+    if score < HAPTIC_THRESHOLD and haptic.can_buzz():
+        haptic.buzz_finger(0)
+        _dbg(f"haptic-BUZZ  mudra={latest.get('mudra','?')} score={score:.0%}")
+
+
+
+DBG_LOG = os.path.join(os.path.dirname(__file__), "..", "dbg_live.txt")
+
+def _dbg(msg):
+    import datetime
+    with open(DBG_LOG, "a") as _f:
+        _f.write(f"{datetime.datetime.now().strftime('%H:%M:%S')} {msg}\n")
+        _f.flush()
+
+
 def process_live_chunk(session, chunk_bytes, ext, chunk_duration_sec):
     chunk_path = os.path.join(session.work_dir, f"chunk_tmp.{ext}")
     with open(chunk_path, "wb") as f:
@@ -285,7 +324,13 @@ def process_live_chunk(session, chunk_bytes, ext, chunk_duration_sec):
             os.remove(chunk_path)
 
     if not session.landmarks_rows:
+        _dbg(f"no-landmarks  frames_decoded={len(frames) if frames else 0}  duration={session.duration_sec:.1f}s")
         return _snapshot(session, chakkar=None, mudra=None, rasa=None)
+
+    _df_diag = pd.DataFrame(session.landmarks_rows)
+    _hand_cols = [c for c in _df_diag.columns if c.startswith("hand_")]
+    _rows_with_hand = int(_df_diag[_hand_cols[0]].notna().sum()) if _hand_cols else 0
+    _dbg(f"diag  rows={len(session.landmarks_rows)}  hand_cols={len(_hand_cols)}  rows_with_hand={_rows_with_hand}")
 
     _write_landmarks_csv(session)
     csv_path = session.landmarks_csv_path
@@ -303,10 +348,25 @@ def process_live_chunk(session, chunk_bytes, ext, chunk_duration_sec):
     try:
         mudra_raw = run_mudra_analysis(
             csv_path, expected_sequence=session.expected_mudra_sequence, model_bundle=session.model_bundle,
+            still_threshold=STILL_THRESHOLD * FRAME_SUBSAMPLE,
         )
     except Exception:
         logger.exception("run_mudra_analysis failed mid-live-session %s", session.session_id)
         mudra_raw = None
+
+    if mudra_raw:
+        for e in mudra_raw:
+            score = (1.0 - len(e["mismatches"]) / e["constraints_checked"]
+                     if e.get("mismatches") is not None and e.get("constraints_checked") else None)
+            ongoing = e["end_sec"] + MUDRA_FINALIZE_MARGIN_SEC > session.duration_sec
+            _dbg(f"mudra={e['mudra']} hand={e['hand_side']} "
+                 f"{e['start_sec']:.1f}-{e['end_sec']:.1f}s "
+                 f"score={f'{score:.0%}' if score is not None else 'n/a'} "
+                 f"{'[ongoing]' if ongoing else '[done]'}")
+    else:
+        _dbg(f"mudra=none  duration={session.duration_sec:.1f}s")
+
+    _haptic_check(mudra_raw, session)
     _merge_mudra_events(session, mudra_raw)
     mudra = _assemble_mudra_summary(session)
 

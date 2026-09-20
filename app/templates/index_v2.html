@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kathak</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style_v2.css') }}">
+</head>
+<body>
+
+  <!-- ── Top navigation bar ── -->
+  <header class="topbar">
+    <div class="brand">Kathak</div>
+    <nav class="tab-nav" aria-label="Analysis sections">
+      <ul class="tabs">
+        <li class="tab active" data-tab="overview">Overview</li>
+        <li class="tab" data-tab="pose">Pose</li>
+        <li class="tab" data-tab="mudra">Mudra</li>
+        <li class="tab" data-tab="timing">Timing</li>
+        <li class="tab" data-tab="tatkaar">Tatkaar <span class="badge">beta</span></li>
+        <li class="tab" data-tab="chakkar">Chakkar</li>
+        <li class="tab" data-tab="abhinaya">Abhinaya <span class="badge">beta</span></li>
+        <li class="tab" data-tab="comparison">Compare <span class="badge">preview</span></li>
+        <li class="tab" data-tab="reports">Report</li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="content">
+
+    <!-- ── Home / upload panel ── -->
+    <section id="upload-panel" class="home">
+
+      <div class="home-hero">
+        <h1 class="hero-title">Analyse your performance</h1>
+        <p class="hero-sub">Upload a recording or practise live &mdash; get timestamped feedback on chakkars, mudras, timing, and expression.</p>
+      </div>
+
+      <div class="action-row">
+
+        <!-- Upload card -->
+        <div class="action-card">
+          <div class="action-card-header">
+            <span class="action-icon">&#8679;</span>
+            <h2>Analyse a recording</h2>
+          </div>
+          <p class="action-desc">Upload a video and get a full timestamped breakdown.</p>
+          <form id="upload-form">
+            <label class="file-drop" for="video-input">
+              <span class="file-drop-hint">Drop video here or <span class="file-drop-link">browse</span></span>
+              <input type="file" id="video-input" name="video" accept="video/*" required>
+            </label>
+            <button type="submit" class="btn-primary">Analyse</button>
+          </form>
+        </div>
+
+        <div class="action-or">or</div>
+
+        <!-- Live card -->
+        <div class="action-card action-card--live">
+          <div class="action-card-header">
+            <span class="action-icon live-dot">&#9679;</span>
+            <h2>Practise live</h2>
+          </div>
+          <p class="action-desc">Perform in front of your camera for real-time feedback as you go.</p>
+          <button type="button" id="live-start-btn" class="btn-live">Go Live</button>
+          <p class="subtext" style="margin-top: 8px;">Uses taal &amp; mudra fields below if filled in.</p>
+        </div>
+
+      </div>
+
+      <!-- Optional config -->
+      <div class="config-block">
+        <details class="taal-details">
+          <summary>Taal &amp; sam <span class="detail-tag">optional</span></summary>
+          <p class="subtext">Neither is auto-detected &mdash; if you know the taal and where the first sam falls in the video, this checks whether chakkars land clean on sam. Leave blank to skip.</p>
+          <div class="taal-fields">
+            <label>Taal
+              <select id="taal-input" name="taal">
+                <option value="">(none)</option>
+                {% for name in taal_names %}
+                <option value="{{ name }}">{{ name.capitalize() }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>First sam (seconds into video)
+              <input type="number" id="sam-time-input" name="sam_time" step="0.01" min="0" placeholder="e.g. 2.35">
+            </label>
+          </div>
+        </details>
+
+        <details class="taal-details">
+          <summary>Expected mudra sequence <span class="detail-tag">optional</span></summary>
+          <p class="subtext">Without this, "Mudra Accuracy" only measures shape rule agreement &mdash; not whether the identification was correct. List the mudras you performed, in order, for a real identification-accuracy score.</p>
+          <div class="taal-fields">
+            <label>Mudra sequence, in order
+              <textarea id="expected-mudras-input" name="expected_mudras" rows="3" placeholder="e.g. pataka, tripataka, ardhapataka, mushti"></textarea>
+            </label>
+          </div>
+        </details>
+      </div>
+
+      <div id="status" class="status"></div>
+    </section>
+
+    <!-- ── Session area: camera + results, side-by-side in live mode ── -->
+    <div class="session-area">
+
+      <div id="live-capture" class="hidden">
+        <div class="live-header">
+          <span class="live-indicator">&#9679; Recording</span>
+          <button type="button" id="live-stop-btn" class="btn-stop">Stop</button>
+        </div>
+        <video id="live-preview" autoplay muted playsinline></video>
+        <div id="live-status" class="status"></div>
+      </div>
+
+      <section id="results" class="hidden">
+
+        <div id="tab-overview" class="tab-panel">
+          <h2>Overview</h2>
+          <div class="overview-layout">
+            <video id="overview-video" controls></video>
+            <div class="score-grid" id="overview-cards"></div>
+          </div>
+        </div>
+
+        <div id="tab-pose" class="tab-panel hidden">
+          <h2>Pose View</h2>
+          <p class="subtext" id="pose-note">Skeleton overlay on the tracked body + hand joints.</p>
+          <video id="pose-video" controls></video>
+        </div>
+
+        <div id="tab-mudra" class="tab-panel hidden">
+          <h2>Mudra Analysis</h2>
+          <p class="subtext" id="mudra-note"></p>
+          <div id="mudra-content"></div>
+        </div>
+
+        <div id="tab-timing" class="tab-panel hidden">
+          <h2>Movement Analysis</h2>
+          <div id="timing-content"></div>
+        </div>
+
+        <div id="tab-tatkaar" class="tab-panel hidden">
+          <h2>Tatkaar Analysis</h2>
+          <p class="subtext" id="tatkaar-note"></p>
+          <div id="tatkaar-content"></div>
+        </div>
+
+        <div id="tab-chakkar" class="tab-panel hidden">
+          <h2>Chakkar Analysis</h2>
+          <div id="chakkar-content"></div>
+        </div>
+
+        <div id="tab-abhinaya" class="tab-panel hidden">
+          <h2>Abhinaya (Rasa)</h2>
+          <p class="subtext" id="abhinaya-note"></p>
+          <div id="abhinaya-content"></div>
+        </div>
+
+        <div id="tab-reports" class="tab-panel hidden">
+          <h2>Report</h2>
+          <ul id="report-list" class="report-list"></ul>
+        </div>
+
+      </section>
+    </div>
+
+    <!-- ── Comparison (outside results, same as original) ── -->
+    <section id="tab-comparison" class="tab-panel hidden">
+      <h2>Comparison</h2>
+      <p class="subtext">Upload a teacher's performance and your own take on the same piece to get an action-by-action comparison, e.g. "at 0:42, the teacher clapped twice, you only clapped once."</p>
+      <form id="comparison-form" class="comparison-form">
+        <div class="comparison-uploads">
+          <label class="upload-box" for="teacher-video-input">
+            <div class="upload-box-title">Teacher / reference video</div>
+            <input type="file" id="teacher-video-input" name="teacher_video" accept="video/*">
+            <div class="upload-box-filename" id="teacher-video-filename">No file selected</div>
+          </label>
+          <label class="upload-box" for="student-video-input">
+            <div class="upload-box-title">Your video</div>
+            <input type="file" id="student-video-input" name="student_video" accept="video/*">
+            <div class="upload-box-filename" id="student-video-filename">No file selected</div>
+          </label>
+        </div>
+        <button type="submit" class="btn-primary">Compare performances</button>
+      </form>
+      <div id="comparison-status" class="status"></div>
+      <div id="comparison-results" class="hidden"></div>
+    </section>
+
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

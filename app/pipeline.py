@@ -554,7 +554,7 @@ MUDRA_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mudra_
 MUDRA_MIN_CONFIDENCE = 0.30
 
 
-def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequence=None, model_bundle=None):
+def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequence=None, model_bundle=None, still_threshold=None):
     """
     Identifies which mudra (if any) is being held during each stable hand
     pose in the video (mudra_classifier.py), then checks that identified
@@ -606,7 +606,8 @@ def run_mudra_analysis(landmarks_csv, model_path=MUDRA_MODEL_PATH, expected_sequ
         motion = hand_motion_magnitude(df, side)
         if motion is None:
             continue
-        for start, end in find_held_windows(t, motion):
+        held_kwargs = {} if still_threshold is None else {"threshold": still_threshold}
+        for start, end in find_held_windows(t, motion, **held_kwargs):
             mask = (t >= start) & (t <= end)
             segment_df = df[mask]
             if segment_df.empty:
