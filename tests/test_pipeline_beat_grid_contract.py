@@ -56,7 +56,7 @@ def test_analyze_video_extracts_the_beat_grid_exactly_once(tmp_path, monkeypatch
 
     monkeypatch.setattr(pipeline, "_extract_beat_grid", counting_extract)
     monkeypatch.setattr(pipeline, "get_video_duration", lambda video_path: 10.0)
-    monkeypatch.setattr(pipeline, "extract_landmarks", lambda video_path, output_dir: str(tmp_path / "landmarks.csv"))
+    monkeypatch.setattr(pipeline, "extract_landmarks", lambda video_path, output_dir, **kw: str(tmp_path / "landmarks.csv"))
     pd.DataFrame({"frame": [0], "timestamp_ms": [0]}).to_csv(tmp_path / "landmarks.csv", index=False)
     monkeypatch.setattr(pipeline, "extract_features", lambda csv, output_dir: str(tmp_path / "features.csv"))
     pd.DataFrame({"timestamp_ms": [0]}).to_csv(tmp_path / "features.csv", index=False)
@@ -68,7 +68,6 @@ def test_analyze_video_extracts_the_beat_grid_exactly_once(tmp_path, monkeypatch
     monkeypatch.setattr(pipeline, "run_mudra_analysis", lambda csv, expected_sequence=None: None)
     monkeypatch.setattr(pipeline, "run_rasa_analysis", lambda csv: None)
     monkeypatch.setattr(pipeline, "run_tatkaar_analysis", lambda video_path, work_dir: None)
-    monkeypatch.setattr(pipeline, "generate_pose_overlay", lambda *a, **kw: False)
     # No usable audio at all -- extract_audio always fails -- the scenario
     # that used to trigger 3 extraction attempts (analyze_video's own call,
     # then run_timing_analysis's fallback, then run_taal_analysis's).

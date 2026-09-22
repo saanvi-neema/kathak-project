@@ -55,17 +55,19 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fileInput = document.getElementById("video-input");
   const status = document.getElementById("status");
-  if (!fileInput.files.length) return;
+  const submitBtn = e.target.querySelector("button[type=submit]");
+  if (!fileInput.files.length || submitBtn.disabled) return;
 
   const formData = new FormData();
   formData.append("video", fileInput.files[0]);
-  const taalValue = document.getElementById("taal-input").value;
-  const samTimeValue = document.getElementById("sam-time-input").value;
-  if (taalValue) formData.append("taal", taalValue);
-  if (samTimeValue) formData.append("sam_time", samTimeValue);
-  const expectedMudrasValue = document.getElementById("expected-mudras-input").value;
-  if (expectedMudrasValue.trim()) formData.append("expected_mudras", expectedMudrasValue);
 
+  // Analysis runs single-threaded CPU pose/audio work that can take minutes
+  // -- a real bug found and fixed: nothing stopped an impatient extra click
+  // from firing off a second (or third, or seventh) full analysis of the
+  // same video while the first was still running, all competing for the
+  // same CPU and making every one of them much slower. Disabled for the
+  // duration of the request instead.
+  submitBtn.disabled = true;
   status.textContent = "Analyzing... this can take a few minutes depending on video length.";
 
   try {
@@ -79,6 +81,8 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
     renderResults(data);
   } catch (err) {
     status.textContent = `Error: ${err.message}`;
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 
@@ -95,7 +99,22 @@ function renderResults(data) {
   renderRasa(data.rasa);
   renderReports(data.report_lines);
   renderPoseView(data);
+
+  try {
+    localStorage.setItem("lastAnalysisResult", JSON.stringify(data));
+  } catch (err) {
+    // storage full/unavailable -- just means the next reload won't restore, not fatal
+  }
 }
+
+(function restoreLastResult() {
+  try {
+    const saved = localStorage.getItem("lastAnalysisResult");
+    if (saved) renderResults(JSON.parse(saved));
+  } catch (err) {
+    // corrupted/stale cache -- ignore and show the normal upload prompt
+  }
+})();
 
 function mediaUrl(sessionId, filename) {
   return `/media/${sessionId}/${encodeURIComponent(filename)}`;
@@ -105,13 +124,37 @@ function renderPoseView(data) {
   const video = document.getElementById("pose-video");
   const note = document.getElementById("pose-note");
   if (data.overlay_video_filename && data.session_id) {
-    video.src = mediaUrl(data.session_id, data.overlay_video_filename);
+    note.textContent = "Generating the skeleton overlay in the background -- this can take a minute or two after the rest of the results are ready.";
     video.classList.remove("hidden");
-    note.textContent = "Skeleton overlay on the tracked body + hand joints.";
+    pollForOverlay(mediaUrl(data.session_id, data.overlay_video_filename), video, note);
   } else {
     video.classList.add("hidden");
     note.textContent = "Couldn't generate a skeleton overlay for this video.";
   }
+}
+
+// generate_pose_overlay() now runs in a background thread after /analyze
+// already returned (see server.py) -- it's not there yet the first time this
+// runs, so poll for it instead of assuming a synchronous result.
+function pollForOverlay(url, video, note, attempt) {
+  attempt = attempt || 0;
+  const MAX_ATTEMPTS = 60; // ~3 minutes at 3s each
+  fetch(url, { method: "HEAD" }).then(resp => {
+    if (resp.ok) {
+      video.src = url;
+      note.textContent = "Skeleton overlay on the tracked body + hand joints.";
+    } else if (attempt < MAX_ATTEMPTS) {
+      setTimeout(() => pollForOverlay(url, video, note, attempt + 1), 3000);
+    } else {
+      note.textContent = "Couldn't generate a skeleton overlay for this video.";
+    }
+  }).catch(() => {
+    if (attempt < MAX_ATTEMPTS) {
+      setTimeout(() => pollForOverlay(url, video, note, attempt + 1), 3000);
+    } else {
+      note.textContent = "Couldn't generate a skeleton overlay for this video.";
+    }
+  });
 }
 
 function renderOverview(data) {
@@ -177,8 +220,35 @@ function renderOverview(data) {
     }
   }
 
-  if (!data.chakkar && !data.timing && !data.mudra) {
-    container.innerHTML += `<div class="empty-state">No chakkar, timing, or mudra signal detected in this clip.</div>`;
+  // Tatkaar and Rasa have no ground-truth-checked accuracy score (both are
+  // UNVALIDATED -- see run_tatkaar_analysis/run_rasa_analysis docstrings and
+  // methods.md), so these show real counts/labels only, not a fabricated
+  // percentage that would imply a precision neither check actually has.
+  if (data.tatkaar && data.tatkaar.events && data.tatkaar.events.length) {
+    container.innerHTML += `
+      <div class="score-card">
+        <div class="label">Tatkaar Phrases Detected</div>
+        <div class="value">${data.tatkaar.events.length}</div>
+      </div>`;
+  }
+
+  if (data.rasa && data.rasa.length) {
+    const counts = {};
+    data.rasa.forEach(e => { counts[e.display_name] = (counts[e.display_name] || 0) + 1; });
+    const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+    container.innerHTML += `
+      <div class="score-card">
+        <div class="label">Dominant Rasa</div>
+        <div class="value">${dominant}</div>
+      </div>
+      <div class="score-card">
+        <div class="label">Rasa Readings</div>
+        <div class="value">${data.rasa.length}</div>
+      </div>`;
+  }
+
+  if (!data.chakkar && !data.timing && !data.mudra && !data.tatkaar && !data.rasa) {
+    container.innerHTML += `<div class="empty-state">No chakkar, timing, mudra, tatkaar, or rasa signal detected in this clip.</div>`;
   }
 }
 
@@ -391,6 +461,7 @@ function bindComparisonFileLabel(inputId, labelId) {
 }
 bindComparisonFileLabel("teacher-video-input", "teacher-video-filename");
 bindComparisonFileLabel("student-video-input", "student-video-filename");
+bindComparisonFileLabel("video-input", "video-input-filename");
 
 document.getElementById("comparison-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -593,12 +664,6 @@ async function startLive() {
     }
 
     const formData = new FormData();
-    const taalValue = document.getElementById("taal-input").value;
-    const samTimeValue = document.getElementById("sam-time-input").value;
-    if (taalValue) formData.append("taal", taalValue);
-    if (samTimeValue) formData.append("sam_time", samTimeValue);
-    const expectedMudrasValue = document.getElementById("expected-mudras-input").value;
-    if (expectedMudrasValue.trim()) formData.append("expected_mudras", expectedMudrasValue);
 
     status.textContent = "Starting live session...";
     let startResp;

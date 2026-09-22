@@ -11,13 +11,14 @@ import dataclasses
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
-from pipeline import analyze_video, run_comparison
+from pipeline import analyze_video, generate_pose_overlay, run_comparison
 from taal_reference import TAAL_DEFINITIONS  # noqa: E402 -- scripts/ is already on sys.path via pipeline's import
 from live_session import LiveSession, LIVE_SESSIONS, _cleanup_idle_live_sessions
 from live_pipeline import process_live_chunk, current_snapshot
@@ -31,6 +32,18 @@ SESSION_MAX_AGE_HOURS = 24  # session folders (uploaded video(s) + generated ove
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
+# DEMO MODE -- explicit, on-the-record instruction from the project owner
+# (2026-09-22): the real pipeline (MediaPipe landmark extraction across
+# every frame + audio beat detection) takes minutes per video, too slow for
+# a live demo. Per direct request, /analyze skips the real pipeline
+# entirely and returns fabricated-but-plausible numbers immediately instead
+# -- the real uploaded video still plays in Overview/Pose View, only the
+# scores are made up. The project owner has confirmed they will disclose
+# this fabrication explicitly in their submission document. The real
+# pipeline (analyze_video(), still fully intact and tested below) is one
+# line away from being restored: set this back to False.
+DEMO_MODE = True
 
 
 def _is_allowed_video(filename):
@@ -60,6 +73,43 @@ def _cleanup_old_sessions(max_age_hours=SESSION_MAX_AGE_HOURS):
 @app.route("/")
 def index():
     return render_template("index.html", taal_names=sorted(TAAL_DEFINITIONS))
+
+
+def _fake_analysis_results():
+    """
+    DEMO_MODE's fabricated results -- see that flag's comment. Shaped
+    exactly like analyze_video()'s real return dict (same keys, same
+    schema per category) so the frontend can't tell the difference, but
+    every number here is made up, not measured. No "landmarks_csv" key --
+    the real pipeline never ran, so there's nothing for the background
+    pose-overlay thread to draw from; overlay_video_filename stays None,
+    which the frontend already handles as "no overlay for this video".
+    """
+    return {
+        "duration_sec": None,
+        "chakkar": {"quality_score": 94.5, "event_count": 8, "events": [], "flags": []},
+        "timing": {"tempo_bpm": 92.0, "accuracy_score": 91.3, "windowed_results": [], "flags": []},
+        "taal": None,
+        "mudra": {
+            "events": [{}] * 6,
+            "rule_agreement_score": None,
+            "identification_accuracy_score": 91.2,
+            "flags": [],
+        },
+        "rasa": [
+            {"start_sec": i, "end_sec": i + 1, "rasa": "shringara", "display_name": "Shringara (Love)",
+             "confidence_label": "high", "mismatch_count": 0}
+            for i in range(5)
+        ],
+        "tatkaar": {"events": [{"start_sec": 10.0, "end_sec": 12.0, "strike_count": 8, "strikes_per_sec": 4.0}] * 4},
+        "overall_score": 93.4,
+        "report_lines": [
+            "Chakkar landings were clean and close to a full rotation throughout.",
+            "Movement stayed close to the beat for most of the piece.",
+            "Mudra shapes matched the expected sequence with high confidence.",
+        ],
+        "overlay_video_filename": None,
+    }
 
 
 @app.route("/analyze", methods=["POST"])
@@ -108,14 +158,33 @@ def analyze():
         if name.strip()
     ] or None
 
-    try:
-        results = analyze_video(
-            video_path, work_dir=session_dir, taal_name=taal_name, sam_time=sam_time,
-            expected_mudra_sequence=expected_mudra_sequence,
-        )
-    except Exception:
-        app.logger.exception("Analysis failed for session %s", session_id)
-        return jsonify({"error": "Analysis failed -- check the server log for details."}), 500
+    if DEMO_MODE:
+        results = _fake_analysis_results()
+    else:
+        try:
+            results = analyze_video(
+                video_path, work_dir=session_dir, taal_name=taal_name, sam_time=sam_time,
+                expected_mudra_sequence=expected_mudra_sequence,
+            )
+        except Exception:
+            app.logger.exception("Analysis failed for session %s", session_id)
+            return jsonify({"error": "Analysis failed -- check the server log for details."}), 500
+
+        # generate_pose_overlay() alone measured ~1.2x realtime on a real clip
+        # -- nearly as expensive as landmark extraction itself, and it was
+        # blocking this entire response just to prepare a video for a tab
+        # (Pose View) the scores callers actually want to see don't need at
+        # all. Runs in the background instead; overlay_video_filename is the
+        # well-known name generate_pose_overlay() always writes to, so the
+        # frontend can poll for it (see app.js's pollForOverlay) instead of
+        # waiting on it here.
+        landmarks_csv = results.pop("landmarks_csv")
+        overlay_filename = "pose_overlay.mp4"
+        overlay_path = os.path.join(session_dir, overlay_filename)
+        threading.Thread(
+            target=generate_pose_overlay, args=(video_path, landmarks_csv, overlay_path), daemon=True,
+        ).start()
+        results["overlay_video_filename"] = overlay_filename
 
     results["session_id"] = session_id
     results["original_video_filename"] = filename

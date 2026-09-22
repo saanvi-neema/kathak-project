@@ -360,7 +360,7 @@ def run_timing_analysis(features_csv, duration_sec, beat_grid):
 
     windowed = windowed_sync_check(peak_times, beat_times, clip_duration=duration_sec,
                                     window_sec=8.0, step_sec=2.0, min_events=5)
-    accuracy = timing_accuracy_score(windowed, clip_duration_sec=duration_sec) if windowed else None
+    accuracy = timing_accuracy_score(windowed) if windowed else None
     flags = flags_from_beat_sync(windowed, category="timing") if windowed else []
     flags.extend(_flags_from_ending(duration_sec, beat_times))
     return {"tempo_bpm": tempo_bpm, "windowed_results": windowed, "accuracy_score": accuracy, "flags": flags}
@@ -725,6 +725,9 @@ def run_rasa_analysis(landmarks_csv):
     return events if events else None
 
 
+BATCH_LANDMARK_FRAME_STRIDE = 3  # see extract_landmarks()'s frame_stride docstring for the speed/resolution trade-off this makes
+
+
 def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_mudra_sequence=None):
     """
     Run the full available pipeline on one uploaded video. Returns a
@@ -743,7 +746,7 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
     os.makedirs(work_dir, exist_ok=True)
     duration_sec = get_video_duration(video_path)
 
-    landmarks_csv = extract_landmarks(video_path, output_dir=work_dir)
+    landmarks_csv = extract_landmarks(video_path, output_dir=work_dir, frame_stride=BATCH_LANDMARK_FRAME_STRIDE)
     features_csv = extract_features(landmarks_csv, output_dir=work_dir)
 
     chakkar = run_chakkar_analysis(landmarks_csv)
@@ -758,10 +761,6 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
     taal = run_taal_analysis(duration_sec, chakkar, taal_name, sam_time, beat_grid)
     rasa_events = run_rasa_analysis(landmarks_csv)
     tatkaar = run_tatkaar_analysis(video_path, work_dir)
-
-    overlay_filename = "pose_overlay.mp4"
-    overlay_path = os.path.join(work_dir, overlay_filename)
-    overlay_ok = generate_pose_overlay(video_path, landmarks_csv, overlay_path)
 
     mudra_flags = []
     mudra_check_results = []
@@ -813,5 +812,13 @@ def analyze_video(video_path, work_dir, taal_name=None, sam_time=None, expected_
         "tatkaar": tatkaar,  # UNVALIDATED against real footage -- see run_tatkaar_analysis. Not part of overall_score or report_lines.
         "overall_score": overall,
         "report_lines": report_lines,
-        "overlay_video_filename": overlay_filename if overlay_ok else None,
+        # generate_pose_overlay() used to run here, synchronously -- on a real
+        # ~114s clip it measured ~1.2x realtime (~135s), nearly as expensive
+        # as landmark extraction itself, purely to prepare a video for a tab
+        # (Pose View) most of a request's callers aren't even looking at yet.
+        # The caller (server.py's /analyze) now runs it in a background
+        # thread after this returns and the scores are already on screen;
+        # landmarks_csv is exposed here so it can, and is stripped from the
+        # JSON response before serializing.
+        "landmarks_csv": landmarks_csv,
     }

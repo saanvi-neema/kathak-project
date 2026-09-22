@@ -123,40 +123,35 @@ def chakkar_quality_score(score_result, count_gap_threshold=0.05, orientation_th
     return float(np.mean([count_score, orientation_score, stop_score]))
 
 
-def timing_accuracy_score(windowed_results, clip_duration_sec):
+def timing_accuracy_score(windowed_results):
     """
     windowed_results: output of beat_sync_check.windowed_sync_check().
-    Returns the % of the clip's duration NOT covered by a "not synchronized"
-    window (merged for overlap, so double-counted overlapping windows don't
-    understate the score).
+    Returns the average phase concentration (Rayleigh R -- continuous,
+    0 = phases spread uniformly/randomly, 1 = perfectly beat-locked)
+    across all evaluated windows, scaled to 0-100.
 
-    Clamped to [0, 100] -- a real bug an external review caught: without
-    clamping, this could return a NEGATIVE score. windowed_sync_check()
-    allows a window to end up to 1e-9s past clip_duration (its own
-    floating-point tolerance), and this function trusts whatever
-    windowed_results/clip_duration_sec it's given rather than re-deriving
-    one from the other -- so unsynced_duration can exceed clip_duration_sec
-    by a hair even in normal use, or by a lot if a caller ever passes
-    windowed_results computed against a different duration than the one
-    supplied here. A negative "accuracy" is nonsensical either way.
+    Real bug found and fixed: this used to score against each window's
+    binary "synchronized" flag (p < 0.05 on the Rayleigh test, Bonferroni-
+    corrected x4 for the 4 tested subdivisions), converted into "% of clip
+    duration not covered by an unsynchronized window." That flag only
+    answers "is there enough evidence, at this sample size, to prove
+    clustering at p<0.05" -- it does not mean "confirmed random." With the
+    sample sizes windowed_sync_check() actually produces (n=5-25 events
+    per 8s window) and a x4 penalty stacked on top, real, moderate
+    phase-locking (R around 0.3-0.6 -- well above the ~1/sqrt(n) chance
+    floor for these n) routinely failed to clear that bar and got scored
+    as a full 0 for that window. A real uploaded video with R averaging
+    ~0.45 across 45 windows scored 15.7% under the old rule despite
+    genuine, moderate beat-locking through most of the clip -- absence of
+    proof (of significance) was being treated as proof of absence (of
+    sync). Using R directly sidesteps significance testing entirely: it's
+    a direct, continuous measure of how tightly movement clusters around
+    a fixed beat-phase, not a pass/fail on a p-value.
     """
     if not windowed_results:
         return None
-    unsynced = [r for r in windowed_results if not r["synchronized"]]
-    if not unsynced:
-        return 100.0
-
-    intervals = sorted((r["window_start"], r["window_end"]) for r in unsynced)
-    merged = [intervals[0]]
-    for start, end in intervals[1:]:
-        if start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-
-    unsynced_duration = sum(end - start for start, end in merged)
-    score = 100 * (1 - unsynced_duration / clip_duration_sec)
-    return max(0.0, min(100.0, score))
+    mean_r = float(np.mean([w["R"] for w in windowed_results]))
+    return max(0.0, min(100.0, mean_r * 100.0))
 
 
 def overall_score(mudra_score=None, chakkar_score=None, timing_score=None):

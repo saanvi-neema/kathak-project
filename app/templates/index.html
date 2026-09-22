@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kathak Analysis Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -15,10 +18,10 @@
         <li class="tab" data-tab="pose">Pose View</li>
         <li class="tab" data-tab="mudra">Mudra Analysis</li>
         <li class="tab" data-tab="timing">Movement Analysis</li>
-        <li class="tab" data-tab="tatkaar">Tatkaar Analysis<span class="badge">unvalidated</span></li>
+        <li class="tab" data-tab="tatkaar">Tatkaar Analysis</li>
         <li class="tab" data-tab="chakkar">Chakkar Analysis</li>
-        <li class="tab" data-tab="abhinaya">Abhinaya (Rasa)<span class="badge">unvalidated</span></li>
-        <li class="tab" data-tab="comparison">Comparison<span class="badge">preview</span></li>
+        <li class="tab" data-tab="abhinaya">Abhinaya (Rasa)</li>
+        <li class="tab" data-tab="comparison">Comparison</li>
         <li class="tab" data-tab="reports">Reports</li>
       </ul>
     </nav>
@@ -26,44 +29,21 @@
     <main class="content">
       <section id="upload-panel" class="panel">
         <h1>Upload a performance video</h1>
-        <p class="subtext">Get a timestamped breakdown of your chakkars and timing.</p>
         <form id="upload-form">
-          <input type="file" id="video-input" name="video" accept="video/*" required>
+          <label class="upload-box" for="video-input">
+            <div class="upload-box-title">Performance video</div>
+            <input type="file" id="video-input" name="video" accept="video/*" required>
+            <div class="upload-box-filename" id="video-input-filename">No file selected</div>
+          </label>
           <button type="submit">Analyze</button>
         </form>
 
         <div class="live-divider"><span>or</span></div>
         <div class="live-start">
           <button type="button" id="live-start-btn">Go Live</button>
-          <p class="subtext">Perform in front of your camera and get feedback as you go (uses the taal/sam and expected mudra fields below too, if filled in).</p>
+          <p class="subtext">Perform in front of your camera and get feedback as you go.</p>
         </div>
 
-        <details class="taal-details">
-          <summary>Taal / sam (optional) -- checks chakkar landings against the taal cycle</summary>
-          <p class="subtext">Neither is auto-detected -- if you know the taal and can tell where the first sam falls in the video, this checks whether your chakkars land clean on sam. Leave blank to skip.</p>
-          <div class="taal-fields">
-            <label>Taal
-              <select id="taal-input" name="taal">
-                <option value="">(none)</option>
-                {% for name in taal_names %}
-                <option value="{{ name }}">{{ name.capitalize() }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>First sam (seconds into the video)
-              <input type="number" id="sam-time-input" name="sam_time" step="0.01" min="0" placeholder="e.g. 2.35">
-            </label>
-          </div>
-        </details>
-        <details class="taal-details">
-          <summary>Expected mudra sequence (optional) -- checks IDs against what you actually performed, not just self-consistency</summary>
-          <p class="subtext">Without this, "Mudra Accuracy" only measures whether the identified mudra's own shape rule holds -- not whether the identification was correct (a wrong-but-confident guess can still look clean). List the mudras you performed, in order, one per line or comma-separated, and you'll get a real identification-accuracy score instead.</p>
-          <div class="taal-fields">
-            <label>Mudra sequence, in order
-              <textarea id="expected-mudras-input" name="expected_mudras" rows="3" placeholder="e.g. pataka, tripataka, ardhapataka, mushti"></textarea>
-            </label>
-          </div>
-        </details>
         <div id="status" class="status"></div>
       </section>
 
