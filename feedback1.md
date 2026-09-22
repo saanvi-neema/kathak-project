@@ -10,6 +10,14 @@
 
 4. **Chakkar criterion: "within 0.15 rotations"** — validated on only 3 clips. Fine to state, but be prepared for the examiner to ask how 0.15 was arrived at specifically.
 
+## Visuals to Add
+
+The Design section has a placeholder for photos and diagrams — fill it. Priority order:
+
+1. **Screenshot of the dashboard with results visible** — shows the software output concretely; a blank/empty state is less useful
+2. **Photo of the haptic glove on a hand** — the hardware is the most tangible engineering contribution and hardest to convey in text alone; judges reading 30 submissions will remember the one with a photo of an actual wearable device
+3. **Pipeline flow diagram** — shows system architecture cleanly; `pipeline_flow.html` or the Mermaid version can be used
+
 ## What Is Working Well
 
 - Goal framing is exactly right — "supplements," "disciple's independent practice," no overreach
