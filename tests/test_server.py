@@ -9,6 +9,7 @@ test_media_route_rejects_path_traversal_attempts). Route-level behavior
 isn't automatically safe just because the underlying logic is simple.
 """
 
+import io
 import os
 import time
 
@@ -75,3 +76,93 @@ def test_cleanup_handles_missing_upload_dir(tmp_path, monkeypatch):
     missing_dir = tmp_path / "does_not_exist"
     monkeypatch.setattr(server, "UPLOAD_DIR", str(missing_dir))
     server._cleanup_old_sessions()  # should not raise
+
+
+def test_analyze_route_backgrounds_overlay_generation_and_returns_json(tmp_path, monkeypatch):
+    """
+    Real bug found and fixed: generate_pose_overlay() was moved out of
+    analyze_video() and into a background thread here in /analyze (see
+    pipeline.py's analyze_video docstring -- it measured ~1.2x realtime,
+    nearly as expensive as landmark extraction, purely to prepare a video
+    for a tab most callers aren't looking at yet). That threading.Thread(..)
+    call, and the analyze_video()-returned landmarks_csv it depends on,
+    were only ever exercised by actually running the full multi-minute
+    pipeline on a real video -- nothing in this suite does that, so a
+    missing `import threading` here went uncaught: every real upload 500'd
+    with NameError, and because that happened outside analyze()'s own
+    try/except, Flask's default handler returned an HTML error page
+    instead of this project's usual jsonify()'d error -- which is why the
+    browser reported "Unexpected token '<' ... is not valid JSON" instead
+    of a real error message. Mocking analyze_video/generate_pose_overlay
+    exercises this route's actual code path in milliseconds instead.
+    """
+    # DEMO_MODE (see its own comment in server.py) bypasses analyze_video()
+    # entirely -- forced off here since this test exists specifically to
+    # cover that real code path, independent of whatever DEMO_MODE currently
+    # defaults to.
+    monkeypatch.setattr(server, "DEMO_MODE", False)
+    monkeypatch.setattr(server, "UPLOAD_DIR", str(tmp_path))
+
+    fake_results = {
+        "duration_sec": 1.0, "chakkar": None, "timing": None, "taal": None,
+        "mudra": None, "rasa": None, "tatkaar": None, "overall_score": None,
+        "report_lines": [], "landmarks_csv": str(tmp_path / "landmarks.csv"),
+    }
+    monkeypatch.setattr(server, "analyze_video", lambda *a, **kw: dict(fake_results))
+
+    overlay_calls = []
+    monkeypatch.setattr(server, "generate_pose_overlay", lambda *a, **kw: overlay_calls.append(a))
+
+    server.app.testing = True
+    client = server.app.test_client()
+    resp = client.post(
+        "/analyze",
+        data={"video": (io.BytesIO(b"fake video bytes"), "clip.mp4")},
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data["overlay_video_filename"] == "pose_overlay.mp4"
+    assert "session_id" in data
+    assert data["original_video_filename"] == "clip.mp4"
+    assert "landmarks_csv" not in data, "internal file path must not leak into the JSON response"
+
+    for _ in range(40):
+        if overlay_calls:
+            break
+        time.sleep(0.05)
+    assert overlay_calls, "generate_pose_overlay should have been scheduled in a background thread"
+
+
+def test_demo_mode_returns_fake_results_without_running_the_real_pipeline(tmp_path, monkeypatch):
+    """
+    DEMO_MODE (see server.py's comment on the flag -- explicit, disclosed
+    project-owner instruction) must never touch analyze_video() or
+    generate_pose_overlay(): the whole point is skipping the real,
+    multi-minute pipeline. Fails loudly if DEMO_MODE's fake path ever
+    starts calling into the real one by accident.
+    """
+    monkeypatch.setattr(server, "DEMO_MODE", True)
+    monkeypatch.setattr(server, "UPLOAD_DIR", str(tmp_path))
+
+    def _must_not_be_called(*a, **kw):
+        raise AssertionError("DEMO_MODE must not invoke the real pipeline")
+
+    monkeypatch.setattr(server, "analyze_video", _must_not_be_called)
+    monkeypatch.setattr(server, "generate_pose_overlay", _must_not_be_called)
+
+    server.app.testing = True
+    client = server.app.test_client()
+    resp = client.post(
+        "/analyze",
+        data={"video": (io.BytesIO(b"fake video bytes"), "clip.mp4")},
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data["overall_score"] is not None
+    assert data["overlay_video_filename"] is None
+    assert data["original_video_filename"] == "clip.mp4"
+    assert "landmarks_csv" not in data

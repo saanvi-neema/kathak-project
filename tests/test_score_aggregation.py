@@ -80,12 +80,16 @@ def test_overall_score_none_when_nothing_available():
     assert overall_score() is None
 
 
-def test_timing_accuracy_full_marks_when_nothing_unsynced():
+def test_timing_accuracy_full_marks_when_perfectly_locked():
     windowed = [
-        {"window_start": 0, "window_end": 8, "synchronized": True},
-        {"window_start": 2, "window_end": 10, "synchronized": True},
+        {"R": 1.0},
+        {"R": 1.0},
     ]
-    assert timing_accuracy_score(windowed, clip_duration_sec=20.0) == 100.0
+    assert timing_accuracy_score(windowed) == 100.0
+
+
+def test_timing_accuracy_score_is_none_when_no_windows():
+    assert timing_accuracy_score([]) is None
 
 
 def test_mudra_rule_agreement_score_is_self_consistency_not_accuracy():
@@ -113,38 +117,30 @@ def test_mudra_identification_and_rule_scores_can_disagree():
     assert id_score == 0.0
 
 
-def test_timing_accuracy_reflects_unsynced_duration():
-    # mirrors the real tatkaar reference clip finding: ~16s unsynced out of ~42s
-    windowed = [
-        {"window_start": 20, "window_end": 28, "synchronized": False},
-        {"window_start": 22, "window_end": 30, "synchronized": False},
-        {"window_start": 24, "window_end": 32, "synchronized": False},
-        {"window_start": 26, "window_end": 34, "synchronized": False},
-        {"window_start": 28, "window_end": 36, "synchronized": False},
-        {"window_start": 0, "window_end": 8, "synchronized": True},
-    ]
-    score = timing_accuracy_score(windowed, clip_duration_sec=41.9)
-    # merged unsynced span is 20-36s = 16s out of 41.9s
-    expected = 100 * (1 - 16 / 41.9)
-    assert abs(score - expected) < 1.0
+def test_timing_accuracy_reflects_mean_phase_concentration():
+    # mirrors the real reference clip finding: moderate concentration
+    # (R ~0.3-0.6) throughout, not perfect lock and not random.
+    windowed = [{"R": r} for r in (0.4, 0.5, 0.35, 0.55, 0.45, 0.6)]
+    score = timing_accuracy_score(windowed)
+    expected = 100 * (0.4 + 0.5 + 0.35 + 0.55 + 0.45 + 0.6) / 6
+    assert abs(score - expected) < 1e-6
 
 
-def test_timing_accuracy_score_is_clamped_when_unsynced_duration_exceeds_clip_duration():
+def test_timing_accuracy_score_is_clamped_to_0_100():
     """
-    Real bug an external review caught: without clamping, a negative
-    "accuracy" was possible whenever the merged unsynced span was as long
-    as (or longer than) the clip duration this function was told about --
-    e.g. windowed_sync_check()'s own 1e-9s end-of-clip tolerance, or any
-    caller passing windowed_results computed against a different duration
-    than the one supplied here. Reproduced directly: an unsynced window
-    that extends past the given clip_duration_sec used to produce a score
-    below 0.
+    Real bug found and fixed: this used to score a window's binary
+    Bonferroni-corrected significance flag rather than its R value, which
+    -- at the small per-window sample sizes windowed_sync_check() actually
+    produces (n=5-25 events per 8s window) -- routinely failed to reach
+    significance even when R showed real, moderate phase-locking (R
+    0.3-0.6, well above the ~1/sqrt(n) chance floor for these n). A real
+    uploaded video with mean R ~0.45 scored 15.7% under the old rule
+    despite genuine beat-locking through most of the clip. Scoring off R
+    directly fixes that; this test just confirms the result still can't
+    leave [0, 100] (R is bounded in [0, 1] but this guards the mapping).
     """
-    windowed = [{"window_start": 0, "window_end": 50, "synchronized": False}]
-    score = timing_accuracy_score(windowed, clip_duration_sec=41.9)  # unsynced span (50) > clip duration (41.9)
-    assert score == 0.0
+    perfectly_locked = [{"R": 1.0}]
+    assert timing_accuracy_score(perfectly_locked) == 100.0
 
-    # Also exercise the boundary in the other direction: a fully-synced
-    # clip must still read as exactly 100, never above.
-    fully_synced = [{"window_start": 0, "window_end": 8, "synchronized": True}]
-    assert timing_accuracy_score(fully_synced, clip_duration_sec=41.9) == 100.0
+    perfectly_random = [{"R": 0.0}]
+    assert timing_accuracy_score(perfectly_random) == 0.0
