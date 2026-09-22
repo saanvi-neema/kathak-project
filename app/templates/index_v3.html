@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kathak Practice Aid</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style_v3.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     HEADER (shared, always visible)
+═══════════════════════════════════════════════════════════ -->
+<header class="header">
+  <span class="brand">Kathak Practice Aid</span>
+  <div class="header-right" id="header-right">
+    <!-- populated by JS when a mode is active -->
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════
+     LANDING PAGE
+═══════════════════════════════════════════════════════════ -->
+<div id="page-landing" class="page">
+  <div class="hero">
+    <div class="hero-title">A Multimodal Kathak Practice Aid</div>
+    <div class="hero-sub">Using machine learning and haptic feedback to objectively measure improvement in chakkar, mudra, taal, and tatkaar technique.</div>
+  </div>
+
+  <div class="mode-cards">
+    <div class="mode-card mode-card--beginner" onclick="showMode('beginner')">
+      <div class="mode-icon">🤚</div>
+      <h2>Beginner</h2>
+      <p>Live webcam feedback on your mudra (hand gestures), with haptic glove vibration when a gesture score falls below threshold. Simple display — one gesture at a time.</p>
+      <button class="mode-btn">Start live session →</button>
+    </div>
+
+    <div class="mode-card mode-card--intermediate" onclick="showMode('intermediate')">
+      <div class="mode-icon">🎬</div>
+      <h2>Intermediate</h2>
+      <p>Upload a recorded video for full analysis: chakkar count and quality, mudra identification, taal timing, tatkaar footwork detection, and rasa expression — all in a tabbed dashboard.</p>
+      <button class="mode-btn">Upload a video →</button>
+    </div>
+
+    <div class="mode-card mode-card--reference" onclick="showMode('reference')">
+      <div class="mode-icon">🎓</div>
+      <h2>Reference Review</h2>
+      <p>Upload two videos — a reference performance and your own. The system aligns them by audio and produces an action-by-action comparison of claps, stomps, and rhythmic patterns.</p>
+      <button class="mode-btn">Compare two videos →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BEGINNER MODE
+═══════════════════════════════════════════════════════════ -->
+<div id="page-beginner" class="page hidden">
+  <div class="mode-header">
+    <span class="mode-badge mode-badge--beginner">Beginner Mode</span>
+    <h2>Live Mudra Feedback</h2>
+    <p>Position your hand in front of the webcam. The system identifies your mudra every 1.5 seconds and sends a haptic buzz if the confidence score is below threshold.</p>
+  </div>
+
+  <div class="live-layout">
+    <!-- Left: webcam -->
+    <div>
+      <div class="webcam-area">
+        <video id="beginner-preview" autoplay muted playsinline></video>
+        <div class="webcam-controls">
+          <button id="beg-start-btn" class="btn-start-live" onclick="beginnerStart()">Start Camera</button>
+          <button id="beg-stop-btn" class="btn-stop hidden" onclick="beginnerStop()">Stop</button>
+          <span id="beg-live-indicator" class="live-indicator hidden">
+            <span class="live-dot"></span> LIVE
+          </span>
+        </div>
+      </div>
+      <div id="beg-status" class="status"></div>
+    </div>
+
+    <!-- Right: mudra display + haptic card -->
+    <div class="mudra-panel">
+      <div class="mudra-display">
+        <div class="mudra-label">Current Mudra</div>
+        <div id="beg-mudra-name" class="mudra-name">—</div>
+        <div id="beg-mudra-score" class="mudra-score">—</div>
+      </div>
+
+      <div class="haptic-card">
+        <span id="beg-haptic-dot" class="haptic-dot haptic-dot--idle"></span>
+        <span id="beg-haptic-text">Haptic glove: waiting</span>
+      </div>
+
+      <div id="beg-mudra-history" style="font-size:13px; color: var(--text-sub);">
+        <!-- last few events listed here -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     INTERMEDIATE MODE
+═══════════════════════════════════════════════════════════ -->
+<div id="page-intermediate" class="page hidden">
+  <div class="mode-header">
+    <span class="mode-badge mode-badge--intermediate">Intermediate Mode</span>
+    <h2>Full Performance Analysis</h2>
+    <p>Upload a recorded video to receive a complete breakdown of chakkar quality, mudra identification, taal timing, tatkaar footwork, and rasa expression.</p>
+  </div>
+
+  <!-- Upload panel -->
+  <div id="int-upload-panel">
+    <div class="upload-section">
+      <label class="file-drop" id="int-file-drop" ondragover="intDropOver(event)" ondrop="intDropFile(event)" onclick="document.getElementById('int-video-input').click()">
+        <input type="file" id="int-video-input" accept="video/*" onchange="intFileSelected()" />
+        <span class="file-drop-icon">🎬</span>
+        <span class="file-drop-hint">Drop your video here or <span class="file-drop-link">browse</span></span>
+        <span id="int-filename" class="file-drop-selected"></span>
+      </label>
+
+      <details class="config-details config-block">
+        <summary>Optional analysis settings <span class="detail-tag">Taal / Mudra sequence</span></summary>
+        <div class="config-inner">
+          <label>Taal
+            <select id="int-taal-input">
+              <option value="">— not specified —</option>
+              {% for name in taal_names %}
+              <option value="{{ name }}">{{ name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Sam time (seconds into video)
+            <input type="number" id="int-sam-input" min="0" step="0.1" placeholder="e.g. 0.5" />
+          </label>
+          <label>Expected mudra sequence (one per line or comma-separated)
+            <textarea id="int-mudra-input" rows="3" placeholder="e.g. pataka, tripataka, ardhachandra"></textarea>
+          </label>
+        </div>
+      </details>
+
+      <button class="btn-primary" id="int-analyze-btn" onclick="intermediateAnalyze()">Analyze video</button>
+      <div id="int-status" class="status"></div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="int-results" class="hidden">
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="int-overview" onclick="intSwitchTab('int-overview', this)">Overview</button>
+      <button class="tab-btn" data-tab="int-chakkar" onclick="intSwitchTab('int-chakkar', this)">Chakkar</button>
+      <button class="tab-btn" data-tab="int-timing" onclick="intSwitchTab('int-timing', this)">Timing</button>
+      <button class="tab-btn" data-tab="int-tatkaar" onclick="intSwitchTab('int-tatkaar', this)">Tatkaar</button>
+      <button class="tab-btn" data-tab="int-mudra" onclick="intSwitchTab('int-mudra', this)">Mudra</button>
+      <button class="tab-btn" data-tab="int-rasa" onclick="intSwitchTab('int-rasa', this)">Rasa</button>
+      <button class="tab-btn" data-tab="int-pose" onclick="intSwitchTab('int-pose', this)">Pose overlay</button>
+    </div>
+
+    <!-- Overview -->
+    <div id="int-overview" class="tab-panel active">
+      <div class="overview-layout">
+        <div>
+          <video id="int-overview-video" controls class="hidden"></video>
+        </div>
+        <div>
+          <div id="int-overview-cards" class="score-grid"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chakkar -->
+    <div id="int-chakkar" class="tab-panel">
+      <div id="int-chakkar-content"></div>
+    </div>
+
+    <!-- Timing -->
+    <div id="int-timing" class="tab-panel">
+      <div id="int-timing-content"></div>
+    </div>
+
+    <!-- Tatkaar -->
+    <div id="int-tatkaar" class="tab-panel">
+      <p id="int-tatkaar-note" class="subtext" style="margin-bottom:16px;"></p>
+      <div id="int-tatkaar-content"></div>
+    </div>
+
+    <!-- Mudra -->
+    <div id="int-mudra" class="tab-panel">
+      <p id="int-mudra-note" class="subtext" style="margin-bottom:16px;"></p>
+      <div id="int-mudra-content"></div>
+    </div>
+
+    <!-- Rasa -->
+    <div id="int-rasa" class="tab-panel">
+      <p id="int-rasa-note" class="subtext" style="margin-bottom:16px;"></p>
+      <div id="int-rasa-content"></div>
+    </div>
+
+    <!-- Pose overlay -->
+    <div id="int-pose" class="tab-panel">
+      <video id="int-pose-video" controls class="hidden" style="width:100%;border-radius:8px;border:1px solid var(--border);background:#111;"></video>
+      <p id="int-pose-note" class="subtext" style="margin-top:10px;"></p>
+    </div>
+
+    <hr class="section-divider" />
+    <button class="back-btn" onclick="intReset()" style="margin-top:8px;">← Analyze another video</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     REFERENCE REVIEW MODE
+═══════════════════════════════════════════════════════════ -->
+<div id="page-reference" class="page hidden">
+  <div class="mode-header">
+    <span class="mode-badge mode-badge--reference">Reference Review</span>
+    <h2>Teacher vs. Student Comparison</h2>
+    <p>Upload a reference performance and your own video. The system aligns them by audio and produces an action-by-action breakdown of claps, stomps, and rhythmic patterns.</p>
+  </div>
+
+  <!-- Upload panel -->
+  <div id="ref-upload-panel">
+    <div class="compare-uploads">
+      <div class="upload-box" onclick="document.getElementById('ref-teacher-input').click()">
+        <input type="file" id="ref-teacher-input" accept="video/*" onchange="refTeacherSelected()" />
+        <span class="upload-box-icon">🎓</span>
+        <span class="upload-box-title">Reference video</span>
+        <span class="upload-box-hint">Guru or reference performance</span>
+        <span id="ref-teacher-name" class="upload-box-name"></span>
+      </div>
+      <div class="upload-box" onclick="document.getElementById('ref-student-input').click()">
+        <input type="file" id="ref-student-input" accept="video/*" onchange="refStudentSelected()" />
+        <span class="upload-box-icon">🧑‍🎓</span>
+        <span class="upload-box-title">Your video</span>
+        <span class="upload-box-hint">Your practice recording</span>
+        <span id="ref-student-name" class="upload-box-name"></span>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="ref-compare-btn" onclick="referenceCompare()">Compare videos</button>
+    <div id="ref-status" class="status"></div>
+  </div>
+
+  <!-- Results -->
+  <div id="ref-results" class="hidden">
+    <div id="ref-results-content"></div>
+    <hr class="section-divider" />
+    <button class="back-btn" onclick="refReset()" style="margin-top:8px;">← Compare different videos</button>
+  </div>
+</div>
+
+<script src="/static/app_v3.js"></script>
+</body>
+</html>

@@ -63,6 +63,11 @@ def index():
     return render_template("index.html", taal_names=sorted(TAAL_DEFINITIONS))
 
 
+@app.route("/v3")
+def index_v3():
+    return render_template("index_v3.html", taal_names=sorted(TAAL_DEFINITIONS))
+
+
 @app.route("/analyze", methods=["POST"])
 def analyze():
     _cleanup_old_sessions()
