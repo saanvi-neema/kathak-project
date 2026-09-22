@@ -76,6 +76,18 @@ The bibliography exceeds the five-reference minimum and covers relevant areas. *
 
 The extracted text contains literal `<u>` tags, so check their appearance in Word. Verify publication details, access dates, and statements such as “full text read.”
 
+## 10. Include a screenshot of the working dashboard
+
+Include **one screenshot of the working dashboard with actual analysis results**. It will help the school committee see what the disciple uses and demonstrate that the project already has a software prototype.
+
+Choose a view showing the performance video alongside movement or mudra results and timestamped feedback. Keep the text readable at the size it will appear in the submission; crop unnecessary browser controls and empty space.
+
+Place it after the software flowchart, with a caption such as:
+
+> **Current practice-aid prototype:** Dashboard showing analysis of a Kathak recording and timestamped feedback for review during independent practice.
+
+Use an actual application screenshot rather than the design mockup. Any visible scores should be understood as prototype outputs, not validated measures of dance proficiency. Keep the hardware sketch too—the screenshot serves a different purpose and does not satisfy the form's request for a hardware design.
+
 ## Revision priorities
 
 The submission already establishes a meaningful problem and a credible engineering approach. The highest-value revisions are to clarify prototype versus planned functionality, align tests with criteria, and reconcile the diagram's claims. These changes would make the proposal easier for a committee to trust without adding more features.
