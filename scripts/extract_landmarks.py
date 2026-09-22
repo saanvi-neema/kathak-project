@@ -19,6 +19,7 @@ Usage:
 import argparse
 import csv
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import mediapipe as mp
@@ -27,6 +28,17 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 
 VISIBILITY_THRESHOLD = 0.5
+
+# Real bottleneck found and fixed: extract_frame_landmarks() used to run the
+# pose/hand/face models back-to-back on every frame, so a frame's total cost
+# was the SUM of all three. They're independent (same input frame, no shared
+# state), and MediaPipe's Tasks API calls are C++ inference that release the
+# GIL while running, so submitting all three at once lets them actually run
+# concurrently -- a frame's cost becomes closer to the SLOWEST of the three,
+# not their sum. Module-level and reused across calls rather than created
+# per frame (thread creation isn't free, and this runs once per frame across
+# thousands of frames).
+_LANDMARKER_EXECUTOR = ThreadPoolExecutor(max_workers=3)
 
 POSE_MODEL_PATH = "models/pose_landmarker_full.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
@@ -121,9 +133,12 @@ def extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, f
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-    pose_result = pose_landmarker.detect_for_video(mp_image, ts_ms)
-    hand_result = hand_landmarker.detect_for_video(mp_image, ts_ms)
-    face_result = face_landmarker.detect_for_video(mp_image, ts_ms)
+    pose_future = _LANDMARKER_EXECUTOR.submit(pose_landmarker.detect_for_video, mp_image, ts_ms)
+    hand_future = _LANDMARKER_EXECUTOR.submit(hand_landmarker.detect_for_video, mp_image, ts_ms)
+    face_future = _LANDMARKER_EXECUTOR.submit(face_landmarker.detect_for_video, mp_image, ts_ms)
+    pose_result = pose_future.result()
+    hand_result = hand_future.result()
+    face_result = face_future.result()
 
     row = {
         "frame": frame_idx,
@@ -180,7 +195,18 @@ def extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, f
     return row
 
 
-def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> str:
+def extract_landmarks(video_path: str, output_dir: str = "data/landmarks", frame_stride: int = 1) -> str:
+    """
+    frame_stride: only run the real (expensive) 3-model detection on every
+    Nth frame; frames in between hold the last detected frame's landmark
+    values (own frame/timestamp_ms still recorded) instead of re-running
+    detection. Real, disclosed speed/resolution trade-off, not a silent
+    approximation -- events chakkar/mudra/timing care about span many
+    frames, so holding position for 1-2 intermediate frames out of every N
+    has a small effect on that data's smoothness, not on whether an event
+    gets detected at all. Default 1 (every frame, unchanged) -- the batch
+    upload path (analyze_video) is the only caller that raises this.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     clip_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -210,7 +236,13 @@ def extract_landmarks(video_path: str, output_dir: str = "data/landmarks") -> st
             ts_ms = next_video_timestamp_ms(frame_idx, fps, last_ts)
             last_ts = ts_ms
 
-            row = extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, frame, frame_idx, ts_ms)
+            if frame_stride <= 1 or frame_idx % frame_stride == 0:
+                row = extract_frame_landmarks(pose_landmarker, hand_landmarker, face_landmarker, frame, frame_idx, ts_ms)
+                last_row = row
+            else:
+                row = dict(last_row)
+                row["frame"] = frame_idx
+                row["timestamp_ms"] = ts_ms
             rows.append(row)
 
             if frame_idx % 100 == 0:
