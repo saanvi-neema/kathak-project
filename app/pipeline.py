@@ -360,7 +360,7 @@ def run_timing_analysis(features_csv, duration_sec, beat_grid):
 
     windowed = windowed_sync_check(peak_times, beat_times, clip_duration=duration_sec,
                                     window_sec=8.0, step_sec=2.0, min_events=5)
-    accuracy = timing_accuracy_score(windowed, clip_duration_sec=duration_sec) if windowed else None
+    accuracy = timing_accuracy_score(windowed) if windowed else None
     flags = flags_from_beat_sync(windowed, category="timing") if windowed else []
     flags.extend(_flags_from_ending(duration_sec, beat_times))
     return {"tempo_bpm": tempo_bpm, "windowed_results": windowed, "accuracy_score": accuracy, "flags": flags}
