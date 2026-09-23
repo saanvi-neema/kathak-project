@@ -12,7 +12,7 @@ flowchart TD
     end
 
     n31(["Mudra Classifier\ntrained MLP model · ~174 MB"])
-    n23 -.-> n31
+    OFFLINE -.-> n31
 
     n30(["MediaPipe Models\npose · hand · face  .task files"])
 
