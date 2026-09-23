@@ -3,12 +3,7 @@ flowchart TD
 
     %% ── Offline training ──────────────────────────────────────────
     subgraph OFFLINE["OFFLINE TRAINING"]
-        direction LR
-        n20["Reference footage\nhand pose photos · video clips"]
-        n21["Extract hand landmarks\nMediaPipe hand · offline run"]
-        n22["Labeled dataset\ndataset.csv · 29 mudras · 4,350 rows"]
-        n23["Train classifier\nMachine Learning classifier (MLP) · mudra_classifier.py"]
-        n20 --> n21 --> n22 --> n23
+        n20["Reference footage\nhand pose photos · video clips"] --> n21["Extract hand landmarks\nMediaPipe hand · offline run"] --> n22["Labeled dataset\ndataset.csv · 29 mudras · 4,350 rows"] --> n23["Train classifier\nMachine Learning classifier (MLP) · mudra_classifier.py"]
     end
 
     n31(["Mudra Classifier\ntrained MLP model · ~174 MB"])
